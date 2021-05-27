@@ -1,0 +1,3 @@
+[submodule "scripts/kabletop_sdk"]
+	path = scripts/kabletop_sdk
+	url = https://github.com/ashuralyk/kabletop-ckb-sdk
