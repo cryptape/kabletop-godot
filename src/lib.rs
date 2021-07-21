@@ -3,6 +3,7 @@
 #![allow(unused)]
 
 use gdnative::prelude::*;
+use gdnative::api::*;
 use std::io::prelude::*;
 use std::fs::File;
 use std::path::PathBuf;
@@ -59,7 +60,6 @@ pub unsafe extern "C" fn require(L: *mut ffi::lua_State) -> i32 {
 
 #[derive(NativeClass)]
 #[inherit(Node)]
-#[register_with(Self::register_signals)]
 struct Kabletop {
 	lua: Lua
 }
@@ -76,31 +76,17 @@ impl Kabletop {
 		}
     }
 
-	fn register_signals(builder: &ClassBuilder<Self>) {
-        builder.add_signal(Signal {
-            name: "lua_event",
-            args: &[
-            	SignalArgument {
-					name: "event_params",
-					default: Variant::default(),
-					export_info: ExportInfo::new(VariantType::VariantArray),
-					usage: PropertyUsage::DEFAULT,
-				}
-			]
-        });
-    }
-
     #[export]
     fn _ready(&self, _owner: &Node) {
         godot_print!("welcome to the kabletop world!")
     }
 
 	#[export]
-	fn init(&self, _owner: &Node, nfts_1: Vec<String>, nfts_2: Vec<String>) {
+	fn preload_nfts(&self, _owner: &Node, nfts_1: Vec<String>, nfts_2: Vec<String>) {
 		self.lua.push_int64(0);
 		self.lua.set_global("_winner", -1, true);
-		if nfts_1.iter().any(|nft| nft.len() != 20) 
-			|| nfts_2.iter().any(|nft| nft.len() != 20) {
+		if nfts_1.iter().any(|nft| nft.len() != 40) 
+			|| nfts_2.iter().any(|nft| nft.len() != 40) {
 			panic!("invalid nft hash");
 		}
 		self.lua.push_string_array(nfts_1);
@@ -110,41 +96,78 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn load(&self, _owner: &Node, path: String) {
-		let mut root = PathBuf::from(path.clone());
+	fn boost(&self, _owner: &Node, entry_path: String) {
+		let mut root = PathBuf::from(entry_path.clone());
 		assert!(root.extension().unwrap() == "lua", "bad file extension");
 		root.pop();
 		self.lua.set_root(root.to_str().unwrap());
-		let mut file = File::open(path).unwrap();
+		let mut file = File::open(entry_path).unwrap();
 		let mut code: String = String::new();
 		file.read_to_string(&mut code);
 		self.lua.do_string(code.as_str());
-		self.check_events(_owner);
 	}
 
 	#[export]
-	fn run(&self, _owner: &Node, code: String) {
+	fn run(&self, _owner: &Node, code: String) -> Vec<Vec<Variant>> {
 		self.lua.do_string(code.as_str());
-		self.check_events(_owner);
+		self.check_events(_owner)
 	}
 
-	fn check_events(&self, _owner: &Node) {
-		let events = self.lua.get_events(true);
-		for event in events {
-			let mut event_params = vec![];
-			for param in event {
+	fn check_events(&self, _owner: &Node) -> Vec<Vec<Variant>> {
+		let mut events = vec![];
+		let lua_events = self.lua.get_events(true);
+		for lua_params in lua_events {
+			let mut params = vec![];
+			for param in lua_params {
 				match param {
-					ffi::lua_Event::Number(value) => event_params.push(value.to_variant()),
-					ffi::lua_Event::String(value) => event_params.push(value.to_variant())
+					ffi::lua_Event::Number(value) => params.push(value.to_variant()),
+					ffi::lua_Event::String(value) => params.push(value.to_variant())
 				}
 			}
-			_owner.emit_signal("lua_event", &event_params);
+			events.push(params);
 		}
+		events
 	}
+}
+
+pub fn init_panic_hook() {
+    // To enable backtrace, you will need the `backtrace` crate to be included in your cargo.toml, or 
+    // a version of rust where backtrace is included in the standard library (e.g. Rust nightly as of the date of publishing)
+    // use backtrace::Backtrace;
+    // use std::backtrace::Backtrace;
+    let old_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let loc_string;
+        if let Some(location) = panic_info.location() {
+            loc_string = format!("file '{}' at line {}", location.file(), location.line());
+        } else {
+            loc_string = "unknown location".to_owned()
+        }
+
+        let error_message;
+        if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            error_message = format!("[RUST] {}: panic occurred: {:?}", loc_string, s);
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            error_message = format!("[RUST] {}: panic occurred: {:?}", loc_string, s);
+        } else {
+            error_message = format!("[RUST] {}: unknown panic occurred", loc_string);
+        }
+        godot_error!("{}", error_message);
+        // Uncomment the following line if backtrace crate is included as a dependency
+        // godot_error!("Backtrace:\n{:?}", Backtrace::new());
+        (*(old_hook.as_ref()))(panic_info);
+
+        unsafe {
+            if let Some(gd_panic_hook) = gdnative::api::utils::autoload::<gdnative::api::Node>("rust_panic_hook") {
+                gd_panic_hook.call("rust_panic_hook", &[GodotString::from_str(error_message).to_variant()]);
+            }
+        }
+    }));
 }
 
 fn init(handle: InitHandle) {
     handle.add_class::<Kabletop>();
+	init_panic_hook();
 }
 
 godot_init!(init);
@@ -197,12 +220,11 @@ mod test {
 		// run
 		let code = "
 			game = Tabletop.new(Role.Silent, Role.Cultist, Player.One)
-			game:draw_card(Player.One)
-			game:advance_round(Player.One)
-			game:draw_card(Player.Two)
-			game:advance_round(Player.Two)
-			game:draw_card(Player.One)
-			game:spell_card(Player.One, 1)
+			game:switch_round()
+			game:draw_card()
+			game:switch_round()
+			game:draw_card()
+			game:spell_card(1)
 		";
 		lua.do_string(code);
 

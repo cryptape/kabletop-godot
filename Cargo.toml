@@ -8,7 +8,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-gdnative = "0.9.3"
+gdnative = "0.9.0"
 kabletop_sdk = { git = "https://github.com/ashuralyk/kabletop-ckb-sdk" }
 
 [build-dependencies]

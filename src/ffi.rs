@@ -53,7 +53,7 @@ fn check_ret(ret: i32) {
 		LUA_ERRSYNTAX => panic!("lua syntax error"),
 		LUA_ERRMEM    => panic!("lua memory error"),
 		LUA_ERRERR    => panic!("lua common error"),
-		_ 			  => panic!("unknown error code ({})", ret)
+		_             => panic!("unknown error code ({})", ret)
 	}
 }
 
@@ -129,7 +129,7 @@ impl Lua {
 						match lua_rawgeti(self.L, -1, i + 1) {
 							LUA_TNUMBER => event.push(lua_Event::Number(self.to_int64(-1))),
 							LUA_TSTRING => event.push(lua_Event::String(self.to_string(-1))),
-							_ 			=> panic!("event param only support INTEGER or STRING type")
+							_           => panic!("event param ({}) only support INTEGER or STRING type", i + 1)
 						}
 						lua_settop(self.L, -2); // pop each event params
 					}
