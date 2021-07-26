@@ -76,7 +76,8 @@ macro_rules! rstr {
 
 pub enum lua_Event {
 	Number(i64),
-	String(String)
+	String(String),
+	NumberTable(Vec<i64>)
 }
 
 pub struct Lua {
@@ -129,7 +130,8 @@ impl Lua {
 						match lua_rawgeti(self.L, -1, i + 1) {
 							LUA_TNUMBER => event.push(lua_Event::Number(self.to_int64(-1))),
 							LUA_TSTRING => event.push(lua_Event::String(self.to_string(-1))),
-							_           => panic!("event param ({}) only support INTEGER or STRING type", i + 1)
+							LUA_TTABLE  => event.push(lua_Event::NumberTable(self.to_int64_array(-1))),
+							_           => panic!("event param ({}) only support INTEGER or STRING or TABLE(i64) type", i + 1)
 						}
 						lua_settop(self.L, -2); // pop each event params
 					}
@@ -246,6 +248,21 @@ impl Lua {
 
 	pub fn to_int64(&self, index: i32) -> i64 {
 		unsafe { lua_tointegerx(self.L, index, ptr::null_mut()) }
+	}
+
+	pub fn to_int64_array(&self, index: i32) -> Vec<i64> {
+		let mut array = vec![];
+		unsafe {
+			let count = lua_rawlen(self.L, index) as i64;
+			for i in 0..count {
+				if lua_rawgeti(self.L, index, i + 1) != LUA_TNUMBER {
+					panic!("to_int64_array only support NUMBER object");
+				}
+				array.push(self.to_int64(-1));
+				lua_settop(self.L, -2);
+			}
+		}
+		array
 	}
 
 	pub fn to_float64(&self, index: i32) -> f64 {

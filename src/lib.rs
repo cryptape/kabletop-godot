@@ -120,8 +120,9 @@ impl Kabletop {
 			let mut params = vec![];
 			for param in lua_params {
 				match param {
-					ffi::lua_Event::Number(value) => params.push(value.to_variant()),
-					ffi::lua_Event::String(value) => params.push(value.to_variant())
+					ffi::lua_Event::Number(value)      => params.push(value.to_variant()),
+					ffi::lua_Event::String(value)      => params.push(value.to_variant()),
+					ffi::lua_Event::NumberTable(value) => params.push(value.to_variant())
 				}
 			}
 			events.push(params);
@@ -234,8 +235,9 @@ mod test {
 			print!("event_params = [");
 			for param in event {
 				match param {
-					ffi::lua_Event::Number(value) => print!("{},", value),
-					ffi::lua_Event::String(value) => print!("{},", value)
+					ffi::lua_Event::Number(value)      => print!("{},", value),
+					ffi::lua_Event::String(value)      => print!("{},", value),
+					ffi::lua_Event::NumberTable(value) => print!("{:?}", value)
 				}
 			}
 			print!("]\n")
