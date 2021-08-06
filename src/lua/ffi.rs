@@ -1,6 +1,8 @@
-use std::os::raw::c_void;
-use std::ptr;
-use std::ffi::{CStr, CString};
+use std::{
+	os::raw::c_void, ptr, ffi::{
+		CStr, CString
+	}
+};
 
 pub enum lua_State {}
 
@@ -12,6 +14,7 @@ extern "C" {
 	fn luaL_newstate(_: i64, _: i64) -> *mut lua_State;
 	fn luaL_openlibs(L: *mut lua_State);
 	fn luaL_loadstring(L: *mut lua_State, s: *const i8) -> i32;
+	fn lua_close(L: *mut lua_State);
 	fn lua_pcallk(L: *mut lua_State, nargs: i32, nresults: i32, errorfunc: i32, ctx: lua_KContext, k: Option<lua_KFunction>) -> i32;
 	fn lua_pushcclosure(L: *mut lua_State, func: lua_CFunction, n: i32);
 	fn lua_setglobal(L: *mut lua_State, name: *const i8);
@@ -35,7 +38,7 @@ extern "C" {
 }
 
 const LUA_OK: i32 = 0;
-const LUA_YIELD: i32 = 1;
+// const LUA_YIELD: i32 = 1;
 const LUA_ERRRUN: i32 = 2;
 const LUA_ERRSYNTAX: i32 = 3;
 const LUA_ERRMEM: i32 = 4;
@@ -67,10 +70,8 @@ macro_rules! cstr {
 
 macro_rules! rstr {
 	($value:expr) => {
-		unsafe {
-			String::from_utf8(CString::from(CStr::from_ptr($value)).as_bytes().to_vec())
-				.unwrap()
-		}
+		String::from_utf8(CString::from(CStr::from_ptr($value)).as_bytes().to_vec())
+			.unwrap()
 	};
 }
 
@@ -96,6 +97,10 @@ impl Lua {
 
 	pub fn emplace(L: *mut lua_State) -> Self {
 		Lua { L, herr: 0 }
+	}
+
+	pub fn close(&self) {
+		unsafe { lua_close(self.L); }
 	}
 
 	pub fn set_root(&self, root: &str) {
