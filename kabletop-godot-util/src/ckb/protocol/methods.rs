@@ -120,7 +120,7 @@ pub mod send {
 	pub fn sync_operation<T: Caller>(caller: &T, operation: String) -> bool {
 		let clone = cache::get_clone();
 		let value: response::ApplyOperation = caller.call(
-			"push_operation", request::PushOperation {
+			"sync_operation", request::PushOperation {
 				round:     clone.round,
 				operation: operation.clone()
 			}).expect("PushOperation call");
@@ -137,7 +137,7 @@ pub mod reply {
 	pub mod hook {
 		use super::HOOKS;
 
-		pub fn add<F: Fn() + Sync + Send + 'static>(hook: F, method: &str) {
+		pub fn add<F: Fn() + Sync + Send + 'static>(method: &str, hook: F) {
 			if let Some(hooks) = HOOKS.lock().unwrap().get_mut(&String::from(method)) {
 				hooks.push(Box::new(hook));
 			} else {
