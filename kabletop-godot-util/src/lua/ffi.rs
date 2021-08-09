@@ -86,6 +86,7 @@ pub struct Lua {
 	L: *mut lua_State,
 	herr: i32
 }
+unsafe impl Send for Lua {}
 
 impl Lua {
 	pub fn new(time: i64, clock: i64) -> Self {
