@@ -1,5 +1,5 @@
 use gdnative::prelude::*;
-use crate::{
+use kabletop_godot_util::{
 	lua::highlevel::Lua, ckb::client::*, cache, lua
 };
 
@@ -13,6 +13,9 @@ struct Kabletop {
 #[gdnative::methods]
 impl Kabletop {
     fn new(_owner: &Node) -> Self {
+		// turn all println! to godot_print!
+		*kabletop_godot_util::USE_GODOT.lock().unwrap() = true;
+		// instance kabletop godot object
         Kabletop {
 			lua:   None,
 			entry: String::new()
