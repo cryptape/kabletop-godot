@@ -5,6 +5,7 @@ use std::{
 };
 
 pub enum lua_State {}
+unsafe impl Send for lua_State {}
 
 type lua_KContext = *mut c_void;
 type lua_KFunction = unsafe extern "C" fn(state: *mut lua_State, status: i32, ctx: lua_KContext) -> i32;
