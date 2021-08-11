@@ -1997,7 +1997,6 @@ dependencies = [
 [[package]]
 name = "kabletop_sdk"
 version = "0.1.0"
-source = "git+https://github.com/ashuralyk/kabletop-ckb-sdk#1ec63976ef490ea2cad9fd7b9e8dc01132d19d66"
 dependencies = [
  "anyhow",
  "async-jsonrpc-client",
