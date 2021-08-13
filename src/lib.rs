@@ -4,7 +4,9 @@ use kabletop_godot_util::{
 		client, hook
 	}
 };
-use std::sync::Mutex;
+use std::{
+	sync::Mutex, thread, convert::TryInto
+};
 
 lazy_static::lazy_static! {
 	static ref EMITOR: Mutex<Option<Ref<Node>>> = Mutex::new(None);
@@ -27,6 +29,9 @@ impl Kabletop {
 		hook::add("sync_operation", |operation| {
 			let value = String::from_utf8(operation.clone()).unwrap();
 			run_code(value);
+		});
+		hook::add("switch_round", |signature| {
+			randomseed(signature);
 		});
 		// instance kabletop godot object
         Kabletop {
@@ -66,7 +71,7 @@ impl Kabletop {
 		cache::init(cache::PLAYER_TYPE::ONE);
 		cache::set_playing_nfts(into_nfts(nfts));
 		client::connect(socket.as_str(), || push_event("disconnect", None));
-		client::open_kabletop_channel();
+		let tx_hash = client::open_kabletop_channel();
 
 		// create lua vm
 		let clone = cache::get_clone();
@@ -85,17 +90,32 @@ impl Kabletop {
 			old.close();
 		}
 		*LUA.lock().unwrap() = Some(lua);
+
+		// set first randomseed
+		randomseed(&tx_hash);
 	}
 
 	#[export]
 	fn run(&self, _owner: &Node, code: String, terminal: bool) {
 		run_code(code.clone());
-		if terminal {
-			client::switch_round();
-		} else {
+		thread::spawn(move || {
 			client::sync_operation(code);
-		}
+			if terminal {
+				let signature = client::switch_round();
+				randomseed(&signature);
+			}
+		});
 	}
+}
+
+fn randomseed(seed: &[u8]) {
+	let seed = {
+		assert!(seed.len() >= 16);
+		&seed[..16]
+	};
+	let seed_1 = i64::from_le_bytes(seed[..8].try_into().unwrap());
+	let seed_2 = i64::from_le_bytes(seed[8..].try_into().unwrap());
+	run_code(format!("math.randomseed({}, {})", seed_1, seed_2));
 }
 
 fn run_code(code: String) {

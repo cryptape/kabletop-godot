@@ -24,7 +24,7 @@ pub fn connect<F: Fn() + Send + 'static>(socket: &str, callback: F) {
 			.register_call("open_kabletop_channel")
 			.register_call("switch_round")
 			.register_call("sync_operation")
-			.connect(200, callback)
+			.connect(100, callback)
 			.expect("connect")
 	);
 }
@@ -35,13 +35,13 @@ pub fn propose_channel_parameter() -> bool {
 	)
 }
 
-pub fn open_kabletop_channel() -> bool {
+pub fn open_kabletop_channel() -> [u8; 32] {
 	send::open_kabletop_channel(
 		CLIENT.lock().unwrap().as_ref().unwrap()
 	)
 }
 
-pub fn switch_round() -> u8 {
+pub fn switch_round() -> [u8; 65] {
 	send::switch_round(
 		CLIENT.lock().unwrap().as_ref().unwrap()
 	)

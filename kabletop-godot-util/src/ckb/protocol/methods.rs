@@ -17,11 +17,11 @@ use ckb_types::{
 	prelude::*, packed::Transaction
 };
 use std::{
-	thread, time, collections::HashMap, sync::Mutex
+	thread, time, collections::HashMap, sync::Mutex, convert::TryInto
 };
 use ckb_crypto::secp::Signature;
 use futures::executor::block_on;
-use molecule::prelude::Entity;
+use molecule::prelude::Entity as MolEntity;
 
 pub mod send {
 	use super::*;
@@ -38,7 +38,7 @@ pub mod send {
 	}
 
 	// try to open a state channel between client and server
-	pub fn open_kabletop_channel<T: Caller>(caller: &T) -> bool {
+	pub fn open_kabletop_channel<T: Caller>(caller: &T) -> [u8; 32] {
 		let clone = cache::get_clone();
 		assert!(clone.user_nfts.len() > 0, "playing nfts need to be set before");
 		let hashes = clone.luacode_hashes
@@ -73,27 +73,28 @@ pub mod send {
 			&clone.user_nfts,
 			&VARS.common.user_key.privkey
 		).expect("sign_channel_tx");
-		let hash = ckb::send_transaction(tx.data()).expect("send_transaction");
-		let mut send_ok = false;
-		for _ in 0..10 {
-			if ckb::get_transaction(hash.pack()).is_ok() {
-				send_ok = true;
-				break;
-			}
-			thread::sleep(time::Duration::from_secs(3));
-		}
-		assert!(send_ok, "send_transaction failed");
+		// let hash = ckb::send_transaction(tx.data()).expect("send_transaction");
+		// let mut send_ok = false;
+		// for _ in 0..10 {
+		// 	if ckb::get_transaction(hash.pack()).is_ok() {
+		// 		send_ok = true;
+		// 		break;
+		// 	}
+		// 	thread::sleep(time::Duration::from_secs(3));
+		// }
+		// assert!(send_ok, "send_transaction failed");
 		let value: response::OpenChannel = caller.call(
 			"open_kabletop_channel", request::SignAndSubmitChannel {
 				tx: tx.clone().into()
 			}).expect("SignAndSubmitChannel call");
+		assert_eq!(value.result, true);
 		let kabletop = tx.output(0).unwrap();
 		cache::set_scripthash_and_capacity(kabletop.calc_lock_hash().unpack(), kabletop.capacity().unpack());
-		value.result
+		tx.hash().unpack()
 	}
 
 	// send operations to verify and make round move forward
-	pub fn switch_round<T: Caller>(caller: &T) -> u8 {
+	pub fn switch_round<T: Caller>(caller: &T) -> [u8; 65] {
 		let mut clone = cache::get_clone();
 		let value: response::OpenRound = caller.call(
 			"switch_round", request::CloseRound {
@@ -106,14 +107,14 @@ pub mod send {
 		match channel::check_channel_round(&clone.script_hash.into(), clone.capacity, &clone.signed_rounds, &clone.opponent_pkhash) {
 			Ok(value) => {
 				if value {
-					cache::commit_user_round(signature);
+					cache::commit_user_round(signature.clone());
 				} else {
 					panic!("signature not match pkhash {}", hex::encode(clone.opponent_pkhash));
 				}
 			},
 			Err(err) => Err(err).unwrap()
 		}
-		value.round
+		signature.serialize().try_into().unwrap()
 	}
 
 	// synchronize operations in current round
@@ -137,32 +138,36 @@ pub mod reply {
 	pub mod hook {
 		use super::HOOKS;
 
-		pub fn add<F: Fn() + Sync + Send + 'static>(method: &str, hook: F) {
-			if let Some(hooks) = HOOKS.lock().unwrap().get_mut(&String::from(method)) {
+		pub fn add<F: Fn(&Vec<u8>) + Sync + Send + 'static>(method: &str, hook: F) {
+			let mut hooks = HOOKS.lock().unwrap();
+			if let Some(hooks) = hooks.get_mut(&String::from(method)) {
 				hooks.push(Box::new(hook));
 			} else {
-				HOOKS.lock().unwrap().insert(String::from(method), vec![Box::new(hook)]);
+				hooks.insert(String::from(method), vec![Box::new(hook)]);
 			}
 		}
 	}
 
 	lazy_static! {
-		static ref HOOKS: Mutex<HashMap<String, Vec<Box<dyn Fn() + Sync + Send>>>> = Mutex::new(HashMap::new());
+		static ref HOOKS: Mutex<HashMap<String, Vec<Box<dyn Fn(&Vec<u8>) + Sync + Send>>>> = Mutex::new(HashMap::new());
 	}
 
-	fn trigger_hook(method: &str) {
-		if let Some(hooks) = HOOKS.lock().unwrap().get(&String::from(method)) {
-			for hook in hooks {
-				hook();
+	fn trigger_hook(method: &str, param: Vec<u8>) {
+		let method = String::from(method);
+		thread::spawn(move || {
+			if let Some(hooks) = HOOKS.lock().unwrap().get(&method) {
+				for hook in hooks {
+					hook(&param);
+				}
 			}
-		}
+		});
 	}
 
 	// response client's proposal of confirmation of channel parameters
 	pub fn propose_channel_parameter(value: Value) -> Result<Value, String> {
 		let value: request::ProposeGameParameter = from_value(value).expect("deserialize ProposeGameParameter");
 		let clone = cache::get_clone();
-		trigger_hook("propose_channel_parameter");
+		trigger_hook("propose_channel_parameter", vec![]);
 		Ok(json!(response::ApproveGameParameter {
 			result: value.staking_ckb == clone.staking_ckb && value.bet_ckb == clone.bet_ckb
 		}))
@@ -203,7 +208,7 @@ pub mod reply {
 		).expect("sign channel transaction");
 		let kabletop = tx.output(0).unwrap();
 		cache::set_scripthash_and_capacity(kabletop.calc_lock_hash().unpack(), kabletop.capacity().unpack());
-		trigger_hook("prepare_kabletop_channel");
+		trigger_hook("prepare_kabletop_channel", tx.data().as_slice().to_vec());
 		Ok(json!(response::CompleteAndSignChannel {
 			tx: tx.into()
 		}))
@@ -213,17 +218,17 @@ pub mod reply {
 	pub fn open_kabletop_channel(value: Value) -> Result<Value, String> {
 		let value: request::SignAndSubmitChannel = from_value(value).expect("deserialize open_kabletop_channel");
 		let hash = value.tx.hash;
-		let mut ok = false;
-		for _ in 0..10 {
-			if ckb::get_transaction(hash.pack()).is_ok() {
-				ok = true;
-				break;
-			}
-			thread::sleep(time::Duration::from_secs(3));
-		}
-		trigger_hook("open_kabletop_channel");
+		// let mut ok = false;
+		// for _ in 0..10 {
+		// 	if ckb::get_transaction(hash.pack()).is_ok() {
+		// 		ok = true;
+		// 		break;
+		// 	}
+		// 	thread::sleep(time::Duration::from_secs(3));
+		// }
+		trigger_hook("open_kabletop_channel", hash.as_bytes().to_vec());
 		Ok(json!(response::OpenChannel {
-			result: ok
+			result: true //ok
 		}))
 	}
 
@@ -246,7 +251,7 @@ pub mod reply {
 			&VARS.common.user_key.privkey
 		).expect("sign round");
 		cache::commit_opponent_round(signature.clone());
-		trigger_hook("switch_round");
+		trigger_hook("switch_round", signature.serialize());
 		Ok(json!(response::OpenRound {
 			round:     clone.round + 1,
 			signature: signature.serialize().pack().into()
@@ -260,8 +265,8 @@ pub mod reply {
 		if value.round != clone.round {
 			return Err(String::from("client and server round are mismatched"));
 		}
-		cache::commit_round_operation(value.operation);
-		trigger_hook("sync_operation");
+		cache::commit_round_operation(value.operation.clone());
+		trigger_hook("sync_operation", value.operation.as_bytes().to_vec());
 		Ok(json!(response::ApplyOperation {
 			result: true
 		}))

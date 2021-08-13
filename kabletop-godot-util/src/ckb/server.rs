@@ -24,12 +24,12 @@ pub fn listen<F: Fn(bool) + Send + 'static>(socket: &str, callback: F) {
 			.register("sync_operation", reply::sync_operation)
 			.register_call("switch_round")
 			.register_call("sync_operation")
-			.listen(200, callback)
+			.listen(100, callback)
 			.expect("listen")
 	);
 }
 
-pub fn switch_round() -> u8 {
+pub fn switch_round() -> [u8; 65] {
 	send::switch_round(
 		SERVER.lock().unwrap().as_ref().unwrap()
 	)

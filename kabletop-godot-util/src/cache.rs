@@ -46,7 +46,7 @@ impl Default for ChannelCache {
 			bet_ckb:             1000,
 			script_hash:         [0u8; 32],
 			capacity:            0,
-			max_nfts_count:      40,
+			max_nfts_count:      9,
 			user_nfts:           vec![],
 			opponent_nfts:       vec![],
 			user_pkhash:         VARS.common.user_key.pubhash.clone(),
