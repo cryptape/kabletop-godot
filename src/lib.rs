@@ -1,7 +1,7 @@
 use gdnative::prelude::*;
 use kabletop_godot_util::{
 	lua::highlevel::Lua, cache, lua, ckb::{
-		client, hook
+		client, hook, owned_nfts
 	}
 };
 use std::{
@@ -10,14 +10,17 @@ use std::{
 
 lazy_static::lazy_static! {
 	static ref EMITOR: Mutex<Option<Ref<Node>>> = Mutex::new(None);
+	static ref EVENTS: Mutex<Vec<(String, Option<Variant>)>> = Mutex::new(vec![]);
 	static ref LUA:    Mutex<Option<Lua>> = Mutex::new(None);
+	static ref NFTS:   Mutex<Option<Variant>> = Mutex::new(None);
 }
 
 #[derive(NativeClass)]
 #[inherit(Node)]
 #[register_with(Self::register_signals)]
 struct Kabletop {
-	entry: String
+	entry: String,
+	nfts:  Vec<String>
 }
 
 #[gdnative::methods]
@@ -35,7 +38,8 @@ impl Kabletop {
 		});
 		// instance kabletop godot object
         Kabletop {
-			entry: String::new()
+			entry: String::new(),
+			nfts:  vec![]
 		}
     }
 
@@ -53,13 +57,59 @@ impl Kabletop {
             name: "disconnect",
             args: &[]
         });
+        builder.add_signal(Signal {
+            name: "nfts_loaded",
+            args: &[SignalArgument {
+                name: "owned_nfts",
+                default: Dictionary::new_shared().to_variant(),
+                export_info: ExportInfo::new(VariantType::Dictionary),
+                usage: PropertyUsage::DEFAULT
+            }]
+        });
     }
 
     #[export]
-    fn _ready(&self, owner: TRef<Node>) {
+    fn _ready(&mut self, owner: TRef<Node>) {
         godot_print!("welcome to the kabletop world!");
 		*EMITOR.lock().unwrap() = Some(owner.claim());
+		thread::spawn(|| {
+			let nfts = {
+				let nfts = Dictionary::new();
+				for (nft, count) in owned_nfts().expect("get owned nfts") {
+					nfts.insert(nft, count.to_variant());
+				}
+				nfts.into_shared()
+			};
+			*NFTS.lock().unwrap() = Some(nfts.to_variant());
+			push_event("nfts_loaded", Some(nfts.to_variant()));
+		});
     }
+
+	#[export]
+	fn _process(&self, _owner: &Node, _delta: f32) {
+		let mut events = EVENTS.lock().unwrap();
+		for (name, value) in &*events {
+			let emitor = EMITOR.lock().unwrap();
+			if let Some(value) = value {
+				unsafe {
+					emitor
+						.as_ref()
+						.unwrap()
+						.assume_safe()
+						.emit_signal(name, &[value.clone()]);
+				}
+			} else {
+				unsafe {
+					emitor
+						.as_ref()
+						.unwrap()
+						.assume_safe()
+						.emit_signal(name, &[]);
+				}
+			}
+		}
+		(*events).clear();
+	}
 
 	#[export]
 	fn set_entry(&mut self, _owner: &Node, entry: String) {
@@ -67,9 +117,27 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn create_channel(&self, _owner: &Node, socket: String, nfts: Vec<String>) {
+	fn set_nfts(&mut self, _owner: &Node, nfts: Vec<String>) {
+		self.nfts = nfts;
+	}
+
+	#[export]
+	fn get_nfts(&self, _owner: &Node) -> Vec<String> {
+		self.nfts.clone()
+	}
+
+	#[export]
+	fn get_owned_nfts(&self, _owner: &Node) -> Option<Variant> {
+		(*NFTS.lock().unwrap()).clone()
+	}
+
+	#[export]
+	fn create_channel(&self, _owner: &Node, socket: String) -> bool {
+		if self.nfts.len() == 0 {
+			return false;
+		}
 		cache::init(cache::PLAYER_TYPE::ONE);
-		cache::set_playing_nfts(into_nfts(nfts));
+		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
 		client::connect(socket.as_str(), || push_event("disconnect", None));
 		let tx_hash = client::open_kabletop_channel();
 
@@ -93,6 +161,7 @@ impl Kabletop {
 
 		// set first randomseed
 		randomseed(&tx_hash);
+		true
 	}
 
 	#[export]
@@ -144,24 +213,10 @@ fn run_code(code: String) {
 }
 
 fn push_event(name: &str, value: Option<Variant>) {
-	let emitor = EMITOR.lock().unwrap();
-	if let Some(value) = value {
-		unsafe {
-			emitor
-				.as_ref()
-				.unwrap()
-				.assume_safe()
-				.emit_signal(name, &[value]);
-		}
-	} else {
-		unsafe {
-			emitor
-				.as_ref()
-				.unwrap()
-				.assume_safe()
-				.emit_signal(name, &[]);
-		}
-	}
+	EVENTS
+		.lock()
+		.unwrap()
+		.push((String::from(name), value));
 }
 
 fn into_nfts(value: Vec<String>) -> Vec<[u8; 20]> {
