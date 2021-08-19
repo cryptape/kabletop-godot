@@ -1,7 +1,9 @@
 use gdnative::prelude::*;
 use kabletop_godot_util::{
-	lua::highlevel::Lua, cache, lua, ckb::{
-		client, hook, owned_nfts
+	lua::highlevel::Lua, cache, lua, p2p::{
+		client, hook
+	}, ckb::{
+		owned_nfts, discard_nfts, purchase_nfts, reveal_nfts, H256
 	}
 };
 use std::{
@@ -10,7 +12,7 @@ use std::{
 
 lazy_static::lazy_static! {
 	static ref EMITOR: Mutex<Option<Ref<Node>>> = Mutex::new(None);
-	static ref EVENTS: Mutex<Vec<(String, Option<Variant>)>> = Mutex::new(vec![]);
+	static ref EVENTS: Mutex<Vec<(String, Vec<Variant>)>> = Mutex::new(vec![]);
 	static ref LUA:    Mutex<Option<Lua>> = Mutex::new(None);
 	static ref NFTS:   Mutex<Option<Variant>> = Mutex::new(None);
 }
@@ -45,26 +47,47 @@ impl Kabletop {
 
 	fn register_signals(builder: &ClassBuilder<Self>) {
         builder.add_signal(Signal {
-            name: "lua_events",
-            args: &[SignalArgument {
-                name: "events",
-                default: Vec::<Variant>::new().to_variant(),
-                export_info: ExportInfo::new(VariantType::VariantArray),
-                usage: PropertyUsage::DEFAULT
-            }]
-        });
-        builder.add_signal(Signal {
             name: "disconnect",
             args: &[]
         });
         builder.add_signal(Signal {
-            name: "nfts_loaded",
-            args: &[SignalArgument {
-                name: "owned_nfts",
-                default: Dictionary::new_shared().to_variant(),
-                export_info: ExportInfo::new(VariantType::Dictionary),
-                usage: PropertyUsage::DEFAULT
-            }]
+            name: "lua_events",
+            args: &[
+				SignalArgument {
+					name: "events",
+					default: Vec::<Variant>::new().to_variant(),
+					export_info: ExportInfo::new(VariantType::VariantArray),
+					usage: PropertyUsage::DEFAULT
+				}
+            ]
+        });
+        builder.add_signal(Signal {
+            name: "owned_updated",
+            args: &[
+				SignalArgument {
+					name: "owned_nfts",
+					default: Dictionary::new_shared().to_variant(),
+					export_info: ExportInfo::new(VariantType::Dictionary),
+					usage: PropertyUsage::DEFAULT
+				}
+			]
+        });
+        builder.add_signal(Signal {
+            name: "transaction_sent",
+            args: &[
+				SignalArgument {
+					name: "uuid",
+					default: Variant::from_u64(0),
+					export_info: ExportInfo::new(VariantType::I64),
+					usage: PropertyUsage::DEFAULT
+				},
+            	SignalArgument {
+					name: "error",
+					default: Variant::default(),
+					export_info: ExportInfo::new(VariantType::GodotString),
+					usage: PropertyUsage::DEFAULT
+				}
+			]
         });
     }
 
@@ -72,40 +95,23 @@ impl Kabletop {
     fn _ready(&mut self, owner: TRef<Node>) {
         godot_print!("welcome to the kabletop world!");
 		*EMITOR.lock().unwrap() = Some(owner.claim());
-		thread::spawn(|| {
-			let nfts = {
-				let nfts = Dictionary::new();
-				for (nft, count) in owned_nfts().expect("get owned nfts") {
-					nfts.insert(nft, count.to_variant());
-				}
-				nfts.into_shared()
-			};
-			*NFTS.lock().unwrap() = Some(nfts.to_variant());
-			push_event("nfts_loaded", Some(nfts.to_variant()));
-		});
+		update_owned_nfts();
     }
 
 	#[export]
-	fn _process(&self, _owner: &Node, _delta: f32) {
+	fn _process(&mut self, _owner: &Node, _delta: f32) {
 		let mut events = EVENTS.lock().unwrap();
 		for (name, value) in &*events {
 			let emitor = EMITOR.lock().unwrap();
-			if let Some(value) = value {
-				unsafe {
-					emitor
-						.as_ref()
-						.unwrap()
-						.assume_safe()
-						.emit_signal(name, &[value.clone()]);
-				}
-			} else {
-				unsafe {
-					emitor
-						.as_ref()
-						.unwrap()
-						.assume_safe()
-						.emit_signal(name, &[]);
-				}
+			if name == "owned_updated" {
+				self.nfts = vec![];
+			}
+			unsafe {
+				emitor
+					.as_ref()
+					.unwrap()
+					.assume_safe()
+					.emit_signal(name, value.as_slice());
 			}
 		}
 		(*events).clear();
@@ -117,13 +123,59 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn set_nfts(&mut self, _owner: &Node, nfts: Vec<String>) {
-		self.nfts = nfts;
+	fn set_nfts(&mut self, _owner: &Node, nfts: Dictionary) {
+		self.nfts = nfts
+			.iter()
+			.map(|(nft, count)| vec![nft.to_string(); count.to_u64() as usize])
+			.collect::<Vec<_>>()
+			.concat();
 	}
 
 	#[export]
-	fn get_nfts(&self, _owner: &Node) -> Vec<String> {
-		self.nfts.clone()
+	fn get_nfts(&self, _owner: &Node) -> Dictionary {
+		if self.nfts.len() > 0 {
+			let mut last_nft = self.nfts[0].clone();
+			let mut count = 0;
+			let nfts = Dictionary::new();
+			for nft in &self.nfts {
+				if &last_nft == nft {
+					count += 1;
+				} else {
+					nfts.insert(last_nft, count);
+					last_nft = nft.clone();
+					count = 1;
+				}
+			}
+			nfts.into_shared()
+		} else {
+			Dictionary::new_shared()
+		}
+	}
+
+	#[export]
+	fn delete_nfts(&mut self, _owner: &Node, nfts: Dictionary) -> u32 {
+		let nfts = nfts
+			.iter()
+			.map(|(nft, count)| vec![nft.to_string(); count.to_u64() as usize])
+			.collect::<Vec<_>>()
+			.concat();
+		let mut uuid = 0;
+		if nfts.len() > 0 {
+			uuid = discard_nfts(&nfts, handle_transaction(update_owned_nfts));
+		} else {
+			godot_print!("no cards selected");
+		}
+		uuid
+	}
+
+	#[export]
+	fn purchase_nfts(&self, _owner: &Node, count: u8) -> u32 {
+		purchase_nfts(count, handle_transaction(|| {}))
+	}
+
+	#[export]
+	fn reveal_nfts(&self, _owner: &Node) -> u32 {
+		reveal_nfts(handle_transaction(|| {}))
 	}
 
 	#[export]
@@ -138,7 +190,7 @@ impl Kabletop {
 		}
 		cache::init(cache::PLAYER_TYPE::ONE);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
-		client::connect(socket.as_str(), || push_event("disconnect", None));
+		client::connect(socket.as_str(), || push_event("disconnect", vec![]));
 		let tx_hash = client::open_kabletop_channel();
 
 		// create lua vm
@@ -208,11 +260,40 @@ fn run_code(code: String) {
 		})
 		.collect::<Vec<Vec<_>>>();
 	if events.len() > 0 {
-		push_event("lua_events", Some(events.to_variant()));
+		push_event("lua_events", vec![events.to_variant()]);
 	}
 }
 
-fn push_event(name: &str, value: Option<Variant>) {
+fn handle_transaction<F: Fn() + 'static + Send>(f: F) -> Box<dyn Fn(u32, Result<H256, String>) + 'static + Send> {
+	return Box::new(move |uuid: u32, result: Result<H256, String>| {
+		match result {
+			Ok(hash) => {
+				godot_print!("uuid = {}, tx_hash = {:?}", uuid, hash);
+				push_event("transaction_sent", vec![uuid.to_variant(), Variant::default()]);
+				f();
+			},
+			Err(err) => {
+				push_event("transaction_sent", vec![uuid.to_variant(), err.to_string().to_variant()]);
+			}
+		}
+	})
+}
+
+fn update_owned_nfts() {
+	thread::spawn(|| {
+		let nfts = {
+			let nfts = Dictionary::new();
+			for (nft, count) in owned_nfts().expect("get owned nfts") {
+				nfts.insert(nft, count.to_variant());
+			}
+			nfts.into_shared()
+		};
+		*NFTS.lock().unwrap() = Some(nfts.to_variant());
+		push_event("owned_updated", vec![nfts.to_variant()]);
+	});
+}
+
+fn push_event(name: &str, value: Vec<Variant>) {
 	EVENTS
 		.lock()
 		.unwrap()

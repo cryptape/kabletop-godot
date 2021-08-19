@@ -1,7 +1,7 @@
 use kabletop_sdk::p2p::{
 	Client, ClientSender
 };
-use crate::ckb::protocol::{
+use crate::p2p::protocol::{
 	send, reply
 };
 use std::sync::Mutex;

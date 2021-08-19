@@ -6,7 +6,7 @@ use kabletop_sdk::{
 	}
 };
 use crate::{
-	cache, ckb::protocol::{
+	cache, p2p::protocol::{
 		request, response
 	}
 };
