@@ -1,54 +1,68 @@
 use kabletop_sdk::p2p::{
 	Client, ClientSender
 };
-use crate::p2p::protocol::{
-	send, reply
+use crate::p2p::{
+	GodotType, protocol::{
+		send, reply
+	}
 };
-use std::sync::Mutex;
+use std::{
+	sync::Mutex, collections::HashMap
+};
 
 lazy_static! {
 	static ref CLIENT: Mutex<Option<ClientSender>> = Mutex::new(None);
 }
 
 // try to enstablish connection between client and server
-pub fn connect<F: Fn() + Send + 'static>(socket: &str, callback: F) {
-	let mut client = CLIENT
-		.lock()
-		.unwrap();
-	*client = Some(
-		Client::new(socket)
-			.register("switch_round", reply::switch_round)
-			.register("sync_operation", reply::sync_operation)
-			.register_call("propose_channel_parameter")
-			.register_call("prepare_kabletop_channel")
-			.register_call("open_kabletop_channel")
-			.register_call("switch_round")
-			.register_call("sync_operation")
-			.connect(100, callback)
-			.expect("connect")
-	);
+pub fn connect<F: Fn() + Send + 'static>(socket: &str, callback: F) -> bool {
+	let connection = Client::new(socket)
+		.register("switch_round", reply::switch_round)
+		.register("sync_operation", reply::sync_operation)
+		.register("sync_p2p_message", reply::sync_p2p_message)
+		.register_call("propose_channel_parameter")
+		.register_call("prepare_kabletop_channel")
+		.register_call("open_kabletop_channel")
+		.register_call("switch_round")
+		.register_call("sync_operation")
+		.register_call("sync_p2p_message")
+		.connect(100, callback);
+	if let Ok(conn) = connection {
+		*CLIENT.lock().unwrap() = Some(conn);
+		true
+	} else {
+		false
+	}
 }
 
-pub fn propose_channel_parameter() -> bool {
+pub fn propose_channel_parameter() -> Result<(), String> {
 	send::propose_channel_parameter(
 		CLIENT.lock().unwrap().as_ref().unwrap()
 	)
 }
 
-pub fn open_kabletop_channel() -> [u8; 32] {
+pub fn open_kabletop_channel() -> Result<[u8; 32], String> {
 	send::open_kabletop_channel(
 		CLIENT.lock().unwrap().as_ref().unwrap()
 	)
 }
 
-pub fn switch_round() -> [u8; 65] {
+pub fn switch_round() -> Result<[u8; 65], String> {
 	send::switch_round(
 		CLIENT.lock().unwrap().as_ref().unwrap()
 	)
 }
 
-pub fn sync_operation(operation: String) -> bool {
+pub fn sync_operation(operation: String) -> Result<(), String> {
 	send::sync_operation(
 		CLIENT.lock().unwrap().as_ref().unwrap(), operation
+	)
+}
+
+pub fn sync_p2p_message(
+	message: String, parameters: HashMap<String, GodotType>
+) -> Result<(String, HashMap<String, GodotType>), String> {
+	send::sync_p2p_message(
+		CLIENT.lock().unwrap().as_ref().unwrap(), message, parameters
 	)
 }

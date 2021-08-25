@@ -12,7 +12,7 @@ lazy_static::lazy_static! {
 	pub static ref EVENTS: Mutex<Vec<(String, Vec<Variant>)>> = Mutex::new(vec![]);
 	pub static ref LUA:    Mutex<Option<Lua>>                 = Mutex::new(None);
 	pub static ref NFTS:   Mutex<Option<Variant>>             = Mutex::new(None);
-	pub static ref STATUS: Mutex<(u8, bool)>                  = Mutex::new((0, true));
+	pub static ref STATUS: Mutex<Option<(u8, bool)>>          = Mutex::new(None);
 }
 
 pub fn randomseed(seed: &[u8]) {
@@ -93,7 +93,7 @@ pub fn update_box_status() {
 			Ok((count, ready)) => status = (count, ready),
 			Err(err)           => godot_print!("{}", err)
 		}
-		*STATUS.lock().unwrap() = status;
+		*STATUS.lock().unwrap() = Some(status);
 		push_event("box_status_updated", vec![status.0.to_variant(), status.1.to_variant()]);
 	});
 }

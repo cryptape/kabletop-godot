@@ -2,10 +2,12 @@ use gdnative::prelude::*;
 use gdnative::api::*;
 use kabletop_godot_util::{
 	lua::highlevel::Lua, cache, ckb::*, p2p::{
-		client, hook
+		client, hook, GodotType
 	}
 };
-use std::thread;
+use std::{
+	thread, collections::HashMap
+};
 
 mod helper;
 use helper::*;
@@ -14,8 +16,9 @@ use helper::*;
 #[inherit(Node)]
 #[register_with(Self::register_signals)]
 struct Kabletop {
-	entry: String,
-	nfts:  Vec<String>
+	entry:     String,
+	nfts:      Vec<String>,
+	firsthand: bool
 }
 
 #[gdnative::methods]
@@ -33,8 +36,9 @@ impl Kabletop {
 		});
 		// instance kabletop godot object
         Kabletop {
-			entry: String::new(),
-			nfts:  vec![]
+			entry:     String::new(),
+			nfts:      vec![],
+			firsthand: false
 		}
     }
 
@@ -78,6 +82,23 @@ impl Kabletop {
 					name: "reveal_ready",
 					default: true.to_variant(),
 					export_info: ExportInfo::new(VariantType::Bool),
+					usage: PropertyUsage::DEFAULT
+				}
+			]
+        });
+        builder.add_signal(Signal {
+            name: "p2p_message_reply",
+            args: &[
+				SignalArgument {
+					name: "message",
+					default: "".to_variant(),
+					export_info: ExportInfo::new(VariantType::GodotString),
+					usage: PropertyUsage::DEFAULT
+				},
+				SignalArgument {
+					name: "parameters",
+					default: Dictionary::new_shared().to_variant(),
+					export_info: ExportInfo::new(VariantType::Dictionary),
 					usage: PropertyUsage::DEFAULT
 				}
 			]
@@ -140,6 +161,7 @@ impl Kabletop {
 					count = 1;
 				}
 			}
+			nfts.insert(last_nft, count);
 			nfts.into_shared()
 		} else {
 			Dictionary::new_shared()
@@ -174,49 +196,65 @@ impl Kabletop {
 	}
 
 	#[export]
+	fn create_nft_wallet(&self, _owner: &Node, callback: Ref<FuncRef>) {
+		create_wallet(handle_transaction(update_box_status, callback));
+	}
+
+	#[export]
 	fn get_owned_nfts(&self, _owner: &Node) -> Option<Variant> {
 		(*NFTS.lock().unwrap()).clone()
 	}
 
 	#[export]
-	fn get_box_status(&self, _owner: &Node) -> Dictionary {
-		let map = Dictionary::new();
-		let status = *STATUS.lock().unwrap();
-		map.insert("count", status.0.to_variant());
-		map.insert("ready", status.1.to_variant());
-		map.into_shared()
+	fn get_box_status(&self, _owner: &Node) -> Option<Dictionary> {
+		if let Some(status) = *STATUS.lock().unwrap() {
+			let map = Dictionary::new();
+			map.insert("count", status.0.to_variant());
+			map.insert("ready", status.1.to_variant());
+			Some(map.into_shared())
+		} else {
+			None
+		}
 	}
 
 	#[export]
-	fn create_channel(&self, _owner: &Node, socket: String) -> bool {
+	fn is_firsthand(&self, _owner: &Node) -> bool {
+		self.firsthand
+	}
+
+	#[export]
+	fn create_channel(&mut self, _owner: &Node, socket: String) -> bool {
 		if self.nfts.len() == 0 {
 			return false;
 		}
 		cache::init(cache::PLAYER_TYPE::ONE);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
-		client::connect(socket.as_str(), || push_event("disconnect", vec![]));
-		let tx_hash = client::open_kabletop_channel();
+		if !client::connect(socket.as_str(), || push_event("disconnect", vec![])) {
+			return false;
+		}
+		let tx_hash = client::open_kabletop_channel().unwrap();
 
 		// create lua vm
-		let clone = cache::get_clone();
+		let channel = cache::get_clone();
 		let mut ckb_time: i64 = 0;
 		for i in 0..8 {
-			ckb_time = (ckb_time << 8) | (clone.script_hash[i] as i64 >> 1);
+			ckb_time = (ckb_time << 8) | (channel.script_hash[i] as i64 >> 1);
 		}
 		let mut ckb_clock: i64 = 0;
 		for i in 8..16 {
-			ckb_clock = (ckb_clock << 8) | (clone.script_hash[i] as i64 >> 1);
+			ckb_clock = (ckb_clock << 8) | (channel.script_hash[i] as i64 >> 1);
 		}
 		let lua = Lua::new(ckb_time, ckb_clock);
-		lua.inject_nfts(from_nfts(clone.user_nfts), from_nfts(clone.opponent_nfts));
+		lua.inject_nfts(from_nfts(channel.user_nfts.clone()), from_nfts(channel.opponent_nfts.clone()));
 		lua.boost(self.entry.clone());
 		if let Some(old) = LUA.lock().unwrap().as_ref() {
 			old.close();
 		}
 		*LUA.lock().unwrap() = Some(lua);
 
-		// set first randomseed
+		// set first randomseed and firsthand
 		randomseed(&tx_hash);
+		self.firsthand = true;
 		true
 	}
 
@@ -224,11 +262,85 @@ impl Kabletop {
 	fn run(&self, _owner: &Node, code: String, terminal: bool) {
 		run_code(code.clone());
 		thread::spawn(move || {
-			client::sync_operation(code);
+			client::sync_operation(code).unwrap();
 			if terminal {
-				let signature = client::switch_round();
+				let signature = client::switch_round().unwrap();
 				randomseed(&signature);
 			}
+		});
+	}
+
+	#[export]
+	fn reply_p2p_message(&self, _owner: &Node, message: String, callback: Ref<FuncRef>) {
+		cache::set_godot_callback(message, Box::new(move |protocol: String, parameters: HashMap<String, GodotType>| {
+			unsafe {
+				let values = Dictionary::new(); 
+				parameters
+					.iter()
+					.for_each(|(name, value)| {
+						let value = match value {
+							GodotType::Bool(value)   => value.to_variant(),
+							GodotType::I64(value)    => value.to_variant(),
+							GodotType::F64(value)    => value.to_variant(),
+							GodotType::String(value) => value.to_variant(),
+							GodotType::Nil           => Variant::default()
+						};
+						values.insert(name, value);
+					});
+				let result = callback
+					.assume_safe()
+					.call_func(&[protocol.to_variant(), values.into_shared().to_variant()]);
+				assert!(result.get_type() == VariantType::Dictionary);
+				let mut values = HashMap::new();
+				result
+					.to_dictionary()
+					.iter()
+					.for_each(|(name, value)| {
+						let value = match value.get_type() {
+							VariantType::Bool        => GodotType::Bool(value.to_bool()),
+							VariantType::I64         => GodotType::I64(value.to_i64()),
+							VariantType::F64         => GodotType::F64(value.to_f64()),
+							VariantType::GodotString => GodotType::String(value.to_godot_string().to_string()),
+							_                        => GodotType::Nil
+						};
+						values.insert(name.to_godot_string().to_string(), value);
+					});
+				values
+			}
+		}));
+	}
+
+	#[export]
+	fn send_p2p_message(&self, _owner: &Node, message: String, parameters: Dictionary) {
+		thread::spawn(move || {
+			let mut values = HashMap::new();
+			parameters
+				.iter()
+				.for_each(|(name, value)| {
+					let value = match value.get_type() {
+						VariantType::Bool        => GodotType::Bool(value.to_bool()),
+						VariantType::I64         => GodotType::I64(value.to_i64()),
+						VariantType::F64         => GodotType::F64(value.to_f64()),
+						VariantType::GodotString => GodotType::String(value.to_godot_string().to_string()),
+						_                        => GodotType::Nil
+					};
+					values.insert(name.to_godot_string().to_string(), value);
+				});
+			let (message, parameters) = client::sync_p2p_message(message, values).unwrap();
+			let values = Dictionary::new(); 
+			parameters
+				.iter()
+				.for_each(|(name, value)| {
+					let value = match value {
+						GodotType::Bool(value)   => value.to_variant(),
+						GodotType::I64(value)    => value.to_variant(),
+						GodotType::F64(value)    => value.to_variant(),
+						GodotType::String(value) => value.to_variant(),
+						GodotType::Nil           => Variant::default()
+					};
+					values.insert(name, value);
+				});
+			push_event("p2p_message_reply", vec![message.to_variant(), values.into_shared().to_variant()]);
 		});
 	}
 }

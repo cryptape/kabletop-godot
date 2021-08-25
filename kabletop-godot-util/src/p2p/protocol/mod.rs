@@ -2,7 +2,7 @@ mod types;
 mod methods;
 
 pub use types::{
-	request, response
+	request, response, GodotType
 };
 pub use methods::{
 	send, reply

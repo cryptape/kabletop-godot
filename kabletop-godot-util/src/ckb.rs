@@ -8,7 +8,7 @@ use kabletop_sdk::{
 			}
 		}, transaction::{
 			builder::{
-				build_tx_discard_nft, build_tx_purchase_nft_package, build_tx_reveal_nft_package
+				build_tx_discard_nft, build_tx_purchase_nft_package, build_tx_reveal_nft_package, build_tx_create_nft_store
 			}, helper::{
 				sighash_script, wallet_script, nft_script, payment_script
 			}
@@ -41,6 +41,7 @@ pub fn owned_nfts() -> Result<HashMap<String, u32>, String> {
 	Ok(nfts)
 }
 
+// get user wallet cell status, including existence and payment or reveal status
 pub fn wallet_status() -> Result<(u8, bool), String> {
     let wallet_script = wallet_script(VARS.common.composer_key.pubhash.to_vec());
     let user_payment_script = payment_script(VARS.common.user_key.pubhash.to_vec());
@@ -50,22 +51,21 @@ pub fn wallet_status() -> Result<(u8, bool), String> {
 		.map_err(|e| e.to_string())?
 		.objects;
     if wallet_cell.is_empty() {
-        return Err(String::from("user hasn't owned a NFT payment certificate."));
-    }
-	match wallet_cell[0].output_data.first() {
-		Some(&count) => {
-			// TODO: check payment cell cell_dep ready status
-			Ok((count, true))
-		},
-		None => Ok((0, true))
+        Ok((0, false))
+    } else {
+		match wallet_cell[0].output_data.first() {
+			Some(&count) => Ok((count, true)),
+			None         => Ok((0, true))
+		}
 	}
 }
 
+// push transaction to ckb network through rpc handler
 fn push_transaction(tx: TransactionView) -> Result<H256, String> {
 	let error: String;
 	match send_transaction(tx.data()) {
 		Ok(hash) => {
-			for _ in 0..60 {
+			for _ in 0..20 {
 				if get_transaction(hash.pack()).is_ok() {
 					return Ok(hash)
 				}
@@ -78,6 +78,7 @@ fn push_transaction(tx: TransactionView) -> Result<H256, String> {
 	Err(error)
 }
 
+// remove selected nfts from user's nft cells
 pub fn discard_nfts<F>(nfts: &Vec<String>, f: F)
 where 
 	F: Fn(Result<H256, String>) + Send + 'static
@@ -99,6 +100,7 @@ where
 	});
 }
 
+// buy nfts from user's wallet cell which is on purchase mode
 pub fn purchase_nfts<F>(count: u8, f: F)
 where
 	F: Fn(Result<H256, String>) + Send + 'static
@@ -116,12 +118,31 @@ where
 	});
 }
 
+// reveal bought nfts from user's wallet cell which is on reveal mode
 pub fn reveal_nfts<F>(f: F)
 where
 	F: Fn(Result<H256, String>) + Send + 'static
 {
 	thread::spawn(move || {
 		match block_on(build_tx_reveal_nft_package()) {
+			Ok(tx) => {
+				match push_transaction(tx) {
+					Ok(hash) => f(Ok(hash)),
+					Err(err) => f(Err(err.to_string()))
+				}
+			},
+			Err(err) => f(Err(err.to_string()))
+		}
+	});
+}
+
+// create nft store to enable purchasing nfts in which user has no nft wallet
+pub fn create_wallet<F>(f: F)
+where
+	F: Fn(Result<H256, String>) + Send + 'static
+{
+	thread::spawn(move || {
+		match block_on(build_tx_create_nft_store()) {
 			Ok(tx) => {
 				match push_transaction(tx) {
 					Ok(hash) => f(Ok(hash)),

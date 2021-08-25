@@ -4,6 +4,16 @@ use serde::{
 use ckb_jsonrpc_types::{
 	TransactionView, JsonBytes
 };
+use std::collections::HashMap;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum GodotType {
+	Nil,
+	Bool(bool),
+	I64(i64),
+	F64(f64),
+	String(String)
+}
 
 // request messages
 pub mod request {
@@ -41,6 +51,13 @@ pub mod request {
 		pub round:     u8,
 		pub operation: String
 	}
+
+	// send user-defined message from godot
+	#[derive(Serialize, Deserialize)]
+	pub struct SendP2pMessage {
+		pub message:    String,
+		pub parameters: HashMap<String, GodotType>
+	}
 }
 
 // response messages
@@ -76,5 +93,12 @@ pub mod response {
 	#[derive(Serialize, Deserialize)]
 	pub struct ApplyOperation {
 		pub result: bool
+	}
+
+	// reply user-defined message from godot
+	#[derive(Serialize, Deserialize)]
+	pub struct ReplyP2pMessage {
+		pub message:    String,
+		pub parameters: HashMap<String, GodotType>
 	}
 }
