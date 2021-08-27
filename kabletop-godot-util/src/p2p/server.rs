@@ -24,19 +24,35 @@ pub fn listen<F: Fn(bool) + Send + 'static>(socket: &str, callback: F) {
 			.register("propose_channel_parameter", reply::propose_channel_parameter)
 			.register("prepare_kabletop_channel", reply::prepare_kabletop_channel)
 			.register("open_kabletop_channel", reply::open_kabletop_channel)
+			.register("close_kabletop_channel", reply::close_kabletop_channel)
 			.register("switch_round", reply::switch_round)
 			.register("sync_operation", reply::sync_operation)
 			.register("sync_p2p_message", reply::sync_p2p_message)
+			.register("notify_game_over", reply::notify_game_over)
+			.register_call("close_kabletop_channel")
 			.register_call("switch_round")
 			.register_call("sync_operation")
 			.register_call("sync_p2p_message")
+			.register_call("notify_game_over")
 			.listen(100, callback)
 			.expect("listen")
 	);
 }
 
+pub fn close_kabletop_channel() -> Result<[u8; 32], String> {
+	send::close_kabletop_channel(
+		SERVER.lock().unwrap().as_ref().unwrap()
+	)
+}
+
 pub fn switch_round() -> Result<[u8; 65], String> {
 	send::switch_round(
+		SERVER.lock().unwrap().as_ref().unwrap()
+	)
+}
+
+pub fn notify_game_over() -> Result<[u8; 65], String> {
+	send::notify_game_over(
 		SERVER.lock().unwrap().as_ref().unwrap()
 	)
 }

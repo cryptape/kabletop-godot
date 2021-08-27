@@ -8,11 +8,12 @@ use std::{
 };
 
 lazy_static::lazy_static! {
-	pub static ref EMITOR: Mutex<Option<Ref<Node>>>           = Mutex::new(None);
-	pub static ref EVENTS: Mutex<Vec<(String, Vec<Variant>)>> = Mutex::new(vec![]);
-	pub static ref LUA:    Mutex<Option<Lua>>                 = Mutex::new(None);
-	pub static ref NFTS:   Mutex<Option<Variant>>             = Mutex::new(None);
-	pub static ref STATUS: Mutex<Option<(u8, bool)>>          = Mutex::new(None);
+	pub static ref EMITOR:   Mutex<Option<Ref<Node>>>                 = Mutex::new(None);
+	pub static ref EVENTS:   Mutex<Vec<(String, Vec<Variant>)>>       = Mutex::new(vec![]);
+	pub static ref FUNCREFS: Mutex<Vec<(Ref<FuncRef>, Vec<Variant>)>> = Mutex::new(vec![]);
+	pub static ref LUA:      Mutex<Option<Lua>>                       = Mutex::new(None);
+	pub static ref NFTS:     Mutex<Option<Variant>>                   = Mutex::new(None);
+	pub static ref STATUS:   Mutex<Option<(u8, bool)>>                = Mutex::new(None);
 }
 
 pub fn randomseed(seed: &[u8]) {
@@ -22,6 +23,7 @@ pub fn randomseed(seed: &[u8]) {
 	};
 	let seed_1 = i64::from_le_bytes(seed[..8].try_into().unwrap());
 	let seed_2 = i64::from_le_bytes(seed[8..].try_into().unwrap());
+	godot_print!("seed_1 = {}, seed_2 = {}", seed_1, seed_2);
 	run_code(format!("math.randomseed({}, {})", seed_1, seed_2));
 }
 
@@ -58,15 +60,12 @@ where
 		match result {
 			Ok(hash) => {
 				godot_print!("hash = {}", hash);
-				unsafe {
-					callback.assume_safe().call_func(&[Variant::default()]);
-				}
+				FUNCREFS.lock().unwrap().push((callback.clone(), vec![Variant::default()]));
 				f();
 			},
 			Err(err) => {
-				unsafe {
-					callback.assume_safe().call_func(&[err.to_string().to_variant()]);
-				}
+				FUNCREFS.lock().unwrap().push((callback.clone(), vec![err.to_string().to_variant()]));
+				f();
 			}
 		}
 	})

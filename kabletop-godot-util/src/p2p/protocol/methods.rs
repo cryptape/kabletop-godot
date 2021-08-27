@@ -1,7 +1,9 @@
 use kabletop_sdk::{
 	config::VARS, p2p::Caller, ckb::{
-		rpc::methods as ckb, transaction::channel::{
-			interact as channel, protocol::Args
+		rpc::methods as ckb, transaction::{
+			builder::build_tx_close_channel, channel::{
+				interact as channel, protocol::Args
+			}
 		}
 	}
 };
@@ -14,7 +16,7 @@ use serde_json::{
 	json, Value, from_value
 };
 use ckb_types::{
-	prelude::*, packed::Transaction
+	prelude::*, packed::Transaction, H256
 };
 use std::{
 	thread, time, collections::HashMap, sync::Mutex, convert::TryInto
@@ -23,8 +25,20 @@ use ckb_crypto::secp::Signature;
 use futures::executor::block_on;
 use molecule::prelude::Entity as MolEntity;
 
+fn check_transaction_committed_or_not(hash: &H256) -> bool {
+	for _ in 0..20 {
+		if ckb::get_transaction(hash.pack()).is_ok() {
+			return true;
+		}
+		thread::sleep(time::Duration::from_secs(5));
+	}
+	return false;
+	// true
+}
+
 pub mod send {
 	use super::*;
+    use ckb_jsonrpc_types::TransactionView;
 
 	// request a proposal of making consensus of channel parameters
 	pub fn propose_channel_parameter<T: Caller>(caller: &T) -> Result<(), String> {
@@ -33,7 +47,7 @@ pub mod send {
 			"propose_channel_parameter", request::ProposeGameParameter {
 				staking_ckb: store.staking_ckb,
 				bet_ckb:     store.bet_ckb
-			}).map_err(|err| format!("ProposeGameParameter -> {}", err.to_string()))?;
+			}).map_err(|err| format!("ProposeGameParameter -> {}", err))?;
 		if !value.result {
 			return Err(String::from("opposite REFUSED proposing channel paramters"));
 		}
@@ -54,14 +68,14 @@ pub mod send {
 			store.staking_ckb,
 			store.bet_ckb,
 			store.max_nfts_count,
-			&store.user_nfts,
-			&store.user_pkhash,
-			&hashes
-		)).map_err(|err| format!("prepare_channel_tx -> {}", err.to_string()))?;
+			store.user_nfts.clone(),
+			store.user_pkhash,
+			hashes
+		)).map_err(|err| format!("prepare_channel_tx -> {}", err))?;
 		let value: response::CompleteAndSignChannel = caller.call(
 			"prepare_kabletop_channel", request::PrepareChannel {
 				tx: tx.into()
-			}).map_err(|err| format!("PrepareChannel -> {}", err.to_string()))?;
+			}).map_err(|err| format!("PrepareChannel -> {}", err))?;
 		let tx = {
 			let tx: Transaction = value.tx.inner.into();
 			tx.into_view()
@@ -75,32 +89,83 @@ pub mod send {
 			store.staking_ckb,
 			store.bet_ckb,
 			store.max_nfts_count,
-			&store.user_nfts,
+			store.user_nfts,
 			&VARS.common.user_key.privkey
-		).map_err(|err| format!("sign_channel_tx -> {}", err.to_string()))?;
+		).map_err(|err| format!("sign_channel_tx -> {}", err))?;
 		let hash = ckb::send_transaction(tx.data())
-			.map_err(|err| format!("send_transaction -> {}", err.to_string()))?;
-		// let mut send_ok = false;
-		// for _ in 0..20 {
-		// 	if ckb::get_transaction(hash.pack()).is_ok() {
-		// 		send_ok = true;
-		// 		break;
-		// 	}
-		// 	thread::sleep(time::Duration::from_secs(5));
-		// }
-		// if !send_ok {
-		// 	return Err(String::from("send_transaction successed, but no committed transaction found in CKB network in 100s"));
-		// }
+			.map_err(|err| format!("send_transaction -> {}", err))?;
+		if !check_transaction_committed_or_not(&hash) {
+			return Err(String::from("send_transaction successed, but no committed transaction found in CKB network in 100s"));
+		}
 		let value: response::OpenChannel = caller.call(
 			"open_kabletop_channel", request::SignAndSubmitChannel {
 				tx: tx.clone().into()
-			}).map_err(|err| format!("SignAndSubmitChannel -> {}", err.to_string()))?;
+			}).map_err(|err| format!("SignAndSubmitChannel -> {}", err))?;
 		if !value.result {
 			return Err(String::from("opposite responsed FAIL for creating kabletop channel"));
 		}
 		let kabletop = tx.output(0).unwrap();
-		cache::set_scripthash_and_capacity(kabletop.calc_lock_hash().unpack(), kabletop.capacity().unpack());
+		cache::set_channel_verification(
+			tx.hash().unpack(),
+			kabletop.calc_lock_hash().unpack(),
+			kabletop.lock().args().raw_data().to_vec(),
+			kabletop.capacity().unpack()
+		);
 		Ok(tx.hash().unpack())
+	}
+
+	// try to close a state channel between client and server
+	pub fn close_kabletop_channel<T: Caller>(caller: &T) -> Result<[u8; 32], String> {
+		let store = cache::get_clone();
+		let tx = block_on(build_tx_close_channel(
+			store.script_args,
+			store.channel_hash,
+			store.signed_rounds,
+			store.winner,
+			false
+		)).map_err(|err| format!("build_tx_close_channel -> {}", err))?;
+
+		// write tx to file for debug
+        let json_tx = TransactionView::from(tx.clone());
+        let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
+        std::fs::write("close_kabletop_channel.json", json).expect("write json file");
+
+		let hash = ckb::send_transaction(tx.data())
+			.map_err(|err| format!("send_transaction -> {}", err))?;
+		if !check_transaction_committed_or_not(&hash) {
+			return Err(String::from("send_transaction successed, but no committed transaction found in CKB network in 100s"));
+		}
+		let value: response::CloseChannel = caller.call(
+			"close_kabletop_channel", request::CloseChannel {
+				tx: tx.into()
+			}).map_err(|err| format!("CloseChannel -> {}", err))?;
+		if !value.result {
+			return Err(String::from("opposite REFUSED to apply closing kabeltop channel"));
+		}
+		Ok(hash.pack().unpack())
+	}
+
+	// notify opposite to verify the game wether finished or not
+	pub fn notify_game_over<T: Caller>(caller: &T) -> Result<[u8; 65], String> {
+		let store = cache::get_clone();
+		let value: response::CloseGame = caller.call(
+			"notify_game_over", request::CloseGame {
+				round:      store.round,
+				operations: store.user_operations.clone()
+			}).map_err(|err| format!("CloseGame -> {}", err))?;
+		if !value.result {
+			return Err(String::from("opposite verified the finish state of game FAILED"));
+		}
+		let signature = Signature::from_slice(value.signature.as_bytes())
+			.map_err(|err| format!("into_signature -> {}", err))?;
+		let mut signed_rounds = store.signed_rounds;
+		signed_rounds.push((channel::make_round(store.user_type, store.user_operations), signature.clone()));
+		match channel::check_channel_round(store.script_hash.into(), store.capacity, signed_rounds, store.opponent_pkhash) {
+			Ok(true)  => cache::commit_user_round(signature.clone()),
+			Ok(false) => return Err(format!("signature not match pkhash {}", hex::encode(store.opponent_pkhash))),
+			Err(err)  => return Err(format!("check_channel_round -> {}", err.to_string()))
+		}
+		Ok(signature.serialize().try_into().unwrap())
 	}
 
 	// send operations to verify and make round move forward
@@ -110,23 +175,18 @@ pub mod send {
 			"switch_round", request::CloseRound {
 				round:      store.round,
 				operations: store.user_operations.clone()
-			}).map_err(|err| format!("CloseRound -> {}", err.to_string()))?;
+			}).map_err(|err| format!("CloseRound -> {}", err))?;
 		if value.round != store.round + 1 {
 			return Err(format!("opposite round count({}) mismatched native round count({})", value.round, store.round));
 		}
 		let signature = Signature::from_slice(value.signature.as_bytes())
-			.map_err(|err| format!("into_signature -> {}", err.to_string()))?;
-		let mut signed_rounds = store.signed_rounds.clone();
-		signed_rounds.push((channel::make_round(store.user_type, &store.user_operations), signature.clone()));
-		match channel::check_channel_round(&store.script_hash.into(), store.capacity, &signed_rounds, &store.opponent_pkhash) {
-			Ok(pass) => {
-				if pass {
-					cache::commit_user_round(signature.clone());
-				} else {
-					return Err(format!("signature not match pkhash {}", hex::encode(store.opponent_pkhash)));
-				}
-			},
-			Err(err) => return Err(format!("check_channel_round -> {}", err.to_string()))
+			.map_err(|err| format!("into_signature -> {}", err))?;
+		let mut signed_rounds = store.signed_rounds;
+		signed_rounds.push((channel::make_round(store.user_type, store.user_operations), signature.clone()));
+		match channel::check_channel_round(store.script_hash.into(), store.capacity, signed_rounds, store.opponent_pkhash) {
+			Ok(true)  => cache::commit_user_round(signature.clone()),
+			Ok(false) => return Err(format!("signature not match pkhash {}", hex::encode(store.opponent_pkhash))),
+			Err(err)  => return Err(format!("check_channel_round -> {}", err.to_string()))
 		}
 		Ok(signature.serialize().try_into().unwrap())
 	}
@@ -138,7 +198,7 @@ pub mod send {
 			"sync_operation", request::PushOperation {
 				round:     store.round,
 				operation: operation.clone()
-			}).map_err(|err| format!("PushOperation -> {}", err.to_string()))?;
+			}).map_err(|err| format!("PushOperation -> {}", err))?;
 		if value.result {
 			cache::commit_round_operation(operation);
 		} else {
@@ -154,7 +214,7 @@ pub mod send {
 		let value: response::ReplyP2pMessage = caller.call(
 			"sync_p2p_message", request::SendP2pMessage {
 				message, parameters
-			}).map_err(|err| format!("SendP2pMessage -> {}", err.to_string()))?;
+			}).map_err(|err| format!("SendP2pMessage -> {}", err))?;
 		Ok((value.message, value.parameters))
 	}
 }
@@ -190,10 +250,10 @@ pub mod reply {
 		});
 	}
 
-	// response client's proposal of confirmation of channel parameters
+	// response proposal of confirmation of channel parameters
 	pub fn propose_channel_parameter(value: Value) -> Result<Value, String> {
 		let value: request::ProposeGameParameter = from_value(value)
-			.map_err(|err| format!("deserialize ProposeGameParameter -> {}", err.to_string()))?;
+			.map_err(|err| format!("deserialize ProposeGameParameter -> {}", err))?;
 		let store = cache::get_clone();
 		trigger_hook("propose_channel_parameter", vec![]);
 		Ok(json!(response::ApproveGameParameter {
@@ -201,10 +261,10 @@ pub mod reply {
 		}))
 	}
 
-	// response client's operation of openning kabletop channel
+	// response operation of openning kabletop channel
 	pub fn prepare_kabletop_channel(value: Value) -> Result<Value, String> {
 		let value: request::PrepareChannel = from_value(value)
-			.map_err(|err| format!("deserialize PrepareChannel -> {}", err.to_string()))?;
+			.map_err(|err| format!("deserialize PrepareChannel -> {}", err))?;
 		let store = cache::get_clone();
 		let hashes = store.luacode_hashes
 			.iter()
@@ -223,64 +283,101 @@ pub mod reply {
 			store.staking_ckb,
 			store.bet_ckb,
 			store.max_nfts_count,
-			&store.user_nfts,
-			&store.user_pkhash,
-			&hashes
-		)).map_err(|err| format!("complete_channel_tx -> {}", err.to_string()))?;
+			store.user_nfts.clone(),
+			store.user_pkhash,
+			hashes
+		)).map_err(|err| format!("complete_channel_tx -> {}", err))?;
 		let tx = channel::sign_channel_tx(
 			tx,
 			store.staking_ckb,
 			store.bet_ckb,
 			store.max_nfts_count,
-			&store.user_nfts,
+			store.user_nfts,
 			&VARS.common.user_key.privkey
-		).map_err(|err| format!("sign_channel_tx -> {}", err.to_string()))?;
+		).map_err(|err| format!("sign_channel_tx -> {}", err))?;
 		let kabletop = tx.output(0).unwrap();
-		cache::set_scripthash_and_capacity(kabletop.calc_lock_hash().unpack(), kabletop.capacity().unpack());
+		cache::set_channel_verification(
+			tx.hash().unpack(),
+			kabletop.calc_lock_hash().unpack(),
+			kabletop.lock().args().raw_data().to_vec(),
+			kabletop.capacity().unpack()
+		);
 		trigger_hook("prepare_kabletop_channel", tx.data().as_slice().to_vec());
 		Ok(json!(response::CompleteAndSignChannel {
 			tx: tx.into()
 		}))
 	}
 
-	// response client's operation of submitting openning kabletop channel transaction
+	// response operation of submitting open_kabletop_channel transaction
 	pub fn open_kabletop_channel(value: Value) -> Result<Value, String> {
 		let value: request::SignAndSubmitChannel = from_value(value)
-			.map_err(|err| format!("deserialize open_kabletop_channel -> {}", err.to_string()))?;
+			.map_err(|err| format!("deserialize open_kabletop_channel -> {}", err))?;
 		let hash = value.tx.hash;
-		// let mut ok = false;
-		// for _ in 0..20 {
-		// 	if ckb::get_transaction(hash.pack()).is_ok() {
-		// 		ok = true;
-		// 		break;
-		// 	}
-		// 	thread::sleep(time::Duration::from_secs(5));
-		// }
+		let ok = check_transaction_committed_or_not(&hash);
 		trigger_hook("open_kabletop_channel", hash.as_bytes().to_vec());
 		Ok(json!(response::OpenChannel {
-			result: true //ok
+			result: ok
 		}))
 	}
 
-	// response client's operation of switching kabletop round
-	pub fn switch_round(value: Value) -> Result<Value, String> {
-		let value: request::CloseRound = from_value(value)
-			.map_err(|err| format!("deserialize switch_round -> {}", err.to_string()))?;
+	// response operation of submitting close_kabletop_channel transaction
+	pub fn close_kabletop_channel(value: Value) -> Result<Value, String> {
+		let value: request::CloseChannel = from_value(value)
+			.map_err(|err| format!("deserialize close_kabletop_channel -> {}", err))?;
+		let hash = value.tx.hash;
+		let ok = check_transaction_committed_or_not(&hash);
+		trigger_hook("close_kabletop_channel", hash.as_bytes().to_vec());
+		Ok(json!(response::CloseChannel {
+			result: ok
+		}))
+	}
+
+	// response verification of wether game has finished 
+	pub fn notify_game_over(value: Value) -> Result<Value, String> {
+		let value: request::CloseGame = from_value(value)
+			.map_err(|err| format!("deserialize verify_game_over -> {}", err))?;
 		let store = cache::get_clone();
 		if value.round != store.round {
 			return Err(String::from("opposite round exceeds native round"));
-		}
-		else if value.operations != store.opponent_operations {
+		} else if value.operations != store.opponent_operations {
 			return Err(String::from("opposite and native operations are mismatched"));
+		} else if store.winner == 0 {
+			return Err(String::from("native winner hasn't been set"));
 		}
-		let next_round = channel::make_round(store.opponent_type, &store.opponent_operations);
+		let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
 		let signature = channel::sign_channel_round(
 			store.script_hash.pack(),
 			store.capacity,
-			&store.signed_rounds,
-			&next_round,
+			store.signed_rounds,
+			next_round,
 			&VARS.common.user_key.privkey
-		).map_err(|err| format!("sign_channel_round -> {}", err.to_string()))?;
+		).map_err(|err| format!("sign_channel_round -> {}", err))?;
+		cache::commit_opponent_round(signature.clone());
+		trigger_hook("game_over", vec![store.winner]);
+		Ok(json!(response::CloseGame {
+			result:    true,
+			signature: signature.serialize().pack().into()
+		}))
+	}
+
+	// response operation of switching kabletop round
+	pub fn switch_round(value: Value) -> Result<Value, String> {
+		let value: request::CloseRound = from_value(value)
+			.map_err(|err| format!("deserialize switch_round -> {}", err))?;
+		let store = cache::get_clone();
+		if value.round != store.round {
+			return Err(String::from("opposite round exceeds native round"));
+		} else if value.operations != store.opponent_operations {
+			return Err(String::from("opposite and native operations are mismatched"));
+		}
+		let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
+		let signature = channel::sign_channel_round(
+			store.script_hash.pack(),
+			store.capacity,
+			store.signed_rounds,
+			next_round,
+			&VARS.common.user_key.privkey
+		).map_err(|err| format!("sign_channel_round -> {}", err))?;
 		cache::commit_opponent_round(signature.clone());
 		trigger_hook("switch_round", signature.serialize());
 		Ok(json!(response::OpenRound {
@@ -292,7 +389,7 @@ pub mod reply {
 	// accept operations generated from current round
 	pub fn sync_operation(value: Value) -> Result<Value, String> {
 		let value: request::PushOperation = from_value(value)
-			.map_err(|err| format!("deserialize PushOperation -> {}", err.to_string()))?;
+			.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
 		let store = cache::get_clone();
 		if value.round != store.round {
 			return Err(String::from("client and server round are mismatched"));
@@ -307,7 +404,7 @@ pub mod reply {
 	// accept user-defined godot message and reply in a same type
 	pub fn sync_p2p_message(value: Value) -> Result<Value, String> {
 		let value: request::SendP2pMessage = from_value(value)
-			.map_err(|err| format!("deserialize PushP2pMessage -> {}", err.to_string()))?;
+			.map_err(|err| format!("deserialize PushP2pMessage -> {}", err))?;
 		let store = cache::GODOT_CACHE.lock().unwrap();
 		let mut result = None;
 		if let Some(callback) = store.callbacks.get(&value.message) {

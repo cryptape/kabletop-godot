@@ -38,9 +38,22 @@ pub mod request {
 		pub tx: TransactionView
 	}
 
+	// winner requests to close channel in default
+	#[derive(Serialize, Deserialize)]
+	pub struct CloseChannel {
+		pub tx: TransactionView
+	}
+
 	// round owner requests to end current round with all of operations made from it
 	#[derive(Serialize, Deserialize)]
 	pub struct CloseRound {
+		pub round:      u8,
+		pub operations: Vec<String>
+	}
+
+	// sender tells opposite that the game has reached to the end which hp from one of players is down to zero
+	#[derive(Serialize, Deserialize)]
+	pub struct CloseGame {
 		pub round:      u8,
 		pub operations: Vec<String>
 	}
@@ -76,9 +89,15 @@ pub mod response {
 		pub tx: TransactionView
 	}
 
-	// response the result of checking confirmation status of channel transaction on the CKB
+	// response the result of checking confirmation status of channel transaction on CKB
 	#[derive(Serialize, Deserialize)]
 	pub struct OpenChannel {
+		pub result: bool
+	}
+
+	// response the result of checking channel status and cell on CKB network
+	#[derive(Serialize, Deserialize)]
+	pub struct CloseChannel {
 		pub result: bool
 	}
 
@@ -86,6 +105,13 @@ pub mod response {
 	#[derive(Serialize, Deserialize)]
 	pub struct OpenRound {
 		pub round:     u8,
+		pub signature: JsonBytes
+	}
+
+	// response wether accept the game finished and generate signature in case of verification passed
+	#[derive(Serialize, Deserialize)]
+	pub struct CloseGame {
+		pub result:    bool,
 		pub signature: JsonBytes
 	}
 

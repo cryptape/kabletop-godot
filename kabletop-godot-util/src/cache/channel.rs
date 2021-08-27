@@ -23,6 +23,8 @@ pub struct ChannelCache {
 	pub staking_ckb:     u64,
 	pub bet_ckb:         u64,
 	pub script_hash:     [u8; 32],
+	pub script_args:     Vec<u8>,
+	pub channel_hash:    [u8; 32],
 	pub capacity:        u64,
 	pub max_nfts_count:  u8,
 	pub user_nfts:       Vec<[u8; 20]>,
@@ -32,6 +34,7 @@ pub struct ChannelCache {
 	pub luacode_hashes:  Vec<[u8; 32]>,
 
 	// for kabletop round
+	pub winner:              u8,
 	pub round:               u8,
 	pub round_owner:         u8,
 	pub user_type:           u8,
@@ -44,9 +47,11 @@ pub struct ChannelCache {
 impl Default for ChannelCache {
 	fn default() -> Self {
 		ChannelCache {
-			staking_ckb:         str_to_capacity("5000").as_u64(),
-			bet_ckb:             str_to_capacity("1000").as_u64(),
+			staking_ckb:         str_to_capacity("500").as_u64(),
+			bet_ckb:             str_to_capacity("100").as_u64(),
 			script_hash:         [0u8; 32],
+			script_args:         vec![],
+			channel_hash:        [0u8; 32],
 			capacity:            0,
 			max_nfts_count:      9,
 			user_nfts:           vec![],
@@ -54,6 +59,7 @@ impl Default for ChannelCache {
 			user_pkhash:         VARS.common.user_key.pubhash.clone(),
 			opponent_pkhash:     [0u8; 20],
 			luacode_hashes:      vec![],
+			winner:              0,
 			round:               0,
 			round_owner:         0,
 			user_type:           0,
@@ -90,10 +96,17 @@ pub fn set_staking_and_bet_ckb(staking: u64, bet: u64) {
 	channel.bet_ckb = str_to_capacity(bet.to_string().as_str()).as_u64();
 }
 
-pub fn set_scripthash_and_capacity(script_hash: [u8; 32], capacity: u64) {
+pub fn set_channel_verification(channel_hash: [u8; 32], script_hash: [u8; 32], script_args: Vec<u8>, capacity: u64) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
+	channel.channel_hash = channel_hash;
 	channel.script_hash = script_hash;
+	channel.script_args = script_args;
 	channel.capacity = capacity;
+}
+
+pub fn set_winner(winner: u8) {
+	let mut channel = CHANNEL_CACHE.lock().unwrap();
+	channel.winner = winner;
 }
 
 pub fn set_playing_nfts(nfts: Vec<[u8; 20]>) {
@@ -114,7 +127,7 @@ pub fn set_opponent_pkhash(pkhash: [u8; 20]) {
 pub fn commit_user_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
 	assert!(channel.round_owner == channel.user_type);
-	let round = make_round(channel.user_type, &channel.user_operations);
+	let round = make_round(channel.user_type, channel.user_operations.clone());
 	channel.round += 1;
 	channel.round_owner = channel.opponent_type;
 	channel.signed_rounds.push((round, signature));
@@ -124,7 +137,7 @@ pub fn commit_user_round(signature: Signature) {
 pub fn commit_opponent_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
 	assert!(channel.round_owner == channel.opponent_type);
-	let round = make_round(channel.opponent_type, &channel.opponent_operations);
+	let round = make_round(channel.opponent_type, channel.opponent_operations.clone());
 	channel.round += 1;
 	channel.round_owner = channel.user_type;
 	channel.signed_rounds.push((round, signature));
