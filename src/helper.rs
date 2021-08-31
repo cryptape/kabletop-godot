@@ -1,19 +1,46 @@
 use gdnative::prelude::*;
 use gdnative::api::*;
 use kabletop_godot_util::{
-	lua::highlevel::Lua, lua, ckb::*
+	lua::highlevel::Lua, lua, ckb::*, p2p::{
+		client, server
+	}
 };
 use std::{
-	sync::Mutex, thread, convert::TryInto
+	sync::Mutex, thread, convert::TryInto, collections::HashMap
 };
+
+#[derive(PartialEq, Copy, Clone)]
+pub enum P2pMode {
+	Client, Server, Empty
+}
 
 lazy_static::lazy_static! {
 	pub static ref EMITOR:   Mutex<Option<Ref<Node>>>                 = Mutex::new(None);
+	pub static ref LUAENTRY: Mutex<String>                            = Mutex::new(String::new());
 	pub static ref EVENTS:   Mutex<Vec<(String, Vec<Variant>)>>       = Mutex::new(vec![]);
 	pub static ref FUNCREFS: Mutex<Vec<(Ref<FuncRef>, Vec<Variant>)>> = Mutex::new(vec![]);
 	pub static ref LUA:      Mutex<Option<Lua>>                       = Mutex::new(None);
 	pub static ref NFTS:     Mutex<Option<Variant>>                   = Mutex::new(None);
 	pub static ref STATUS:   Mutex<Option<(u8, bool)>>                = Mutex::new(None);
+	pub static ref P2PMODE:  Mutex<P2pMode>                           = Mutex::new(P2pMode::Empty);
+	pub static ref HOOKREFS: Mutex<HashMap<String, Ref<FuncRef>>>     = Mutex::new(HashMap::new());
+	pub static ref DELAIES:  Mutex<HashMap<String, Vec<(f32, Box<dyn Fn() + 'static + Send + Sync>)>>> = Mutex::new(HashMap::new());
+}
+
+pub fn set_emitor(godot_node: Ref<Node>) {
+	*EMITOR.lock().unwrap() = Some(godot_node);
+}
+
+pub fn get_emitor() -> Option<Ref<Node>> {
+	*EMITOR.lock().unwrap()
+}
+
+pub fn set_lua_entry(entry: String) {
+	*LUAENTRY.lock().unwrap() = entry;
+}
+
+pub fn get_lua_entry() -> String {
+	LUAENTRY.lock().unwrap().clone()
 }
 
 pub fn randomseed(seed: &[u8]) {
@@ -23,32 +50,44 @@ pub fn randomseed(seed: &[u8]) {
 	};
 	let seed_1 = i64::from_le_bytes(seed[..8].try_into().unwrap());
 	let seed_2 = i64::from_le_bytes(seed[8..].try_into().unwrap());
-	godot_print!("seed_1 = {}, seed_2 = {}", seed_1, seed_2);
 	run_code(format!("math.randomseed({}, {})", seed_1, seed_2));
 }
 
-pub fn run_code(code: String) {
-	let events = LUA
-		.lock()
-		.unwrap()
-		.as_ref()
-		.expect("no kabletop channel is opened")
-		.run(code.clone())
-		.iter()
-		.map(|event| {
-			let mut params = vec![];
-			for field in event {
-				match field {
-					lua::ffi::lua_Event::Number(value)      => params.push(value.to_variant()),
-					lua::ffi::lua_Event::String(value)      => params.push(value.to_variant()),
-					lua::ffi::lua_Event::NumberTable(value) => params.push(value.to_variant())
+pub fn set_lua(lua: Lua) {
+	unset_lua();
+	*LUA.lock().unwrap() = Some(lua);
+}
+
+pub fn unset_lua() {
+	if let Some(lua) = LUA.lock().unwrap().as_ref() {
+		lua.close();
+	}
+	*LUA.lock().unwrap() = None;
+}
+
+pub fn run_code(code: String) -> bool {
+	if let Some(lua) = LUA.lock().unwrap().as_ref() {
+		let events = lua
+			.run(code.clone())
+			.iter()
+			.map(|event| {
+				let mut params = vec![];
+				for field in event {
+					match field {
+						lua::ffi::lua_Event::Number(value)      => params.push(value.to_variant()),
+						lua::ffi::lua_Event::String(value)      => params.push(value.to_variant()),
+						lua::ffi::lua_Event::NumberTable(value) => params.push(value.to_variant())
+					}
 				}
-			}
-			params
-		})
-		.collect::<Vec<Vec<_>>>();
-	if events.len() > 0 {
-		push_event("lua_events", vec![events.to_variant()]);
+				params
+			})
+			.collect::<Vec<Vec<_>>>();
+		if events.len() > 0 {
+			push_event("lua_events", vec![events.to_variant()]);
+		}
+		true
+	} else {
+		false
 	}
 }
 
@@ -59,13 +98,12 @@ where
 	return Box::new(move |result: Result<H256, String>| {
 		match result {
 			Ok(hash) => {
-				godot_print!("hash = {}", hash);
-				FUNCREFS.lock().unwrap().push((callback.clone(), vec![Variant::default()]));
 				f();
+				FUNCREFS.lock().unwrap().push((callback.clone(), vec![true.to_variant(), hex::encode(hash).to_variant()]));
 			},
 			Err(err) => {
-				FUNCREFS.lock().unwrap().push((callback.clone(), vec![err.to_string().to_variant()]));
 				f();
+				FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), err.to_string().to_variant()]));
 			}
 		}
 	})
@@ -80,8 +118,15 @@ pub fn update_owned_nfts() {
 			}
 			nfts.into_shared()
 		};
-		*NFTS.lock().unwrap() = Some(nfts.to_variant());
-		push_event("owned_nfts_updated", vec![nfts.to_variant()]);
+		if *NFTS.lock().unwrap() != Some(nfts.to_variant()) {
+			*NFTS.lock().unwrap() = Some(nfts.to_variant());
+			DELAIES.lock().unwrap().remove(&String::from("update_owned_nfts"));
+			push_event("owned_nfts_updated", vec![nfts.to_variant()]);
+		} else {
+			DELAIES.lock().unwrap().insert(String::from("update_owned_nfts"), vec![
+				(2.0, Box::new(update_owned_nfts)), (2.0, Box::new(update_owned_nfts)), (2.0, Box::new(update_owned_nfts))
+			]);
+		}
 	});
 }
 
@@ -92,9 +137,30 @@ pub fn update_box_status() {
 			Ok((count, ready)) => status = (count, ready),
 			Err(err)           => godot_print!("{}", err)
 		}
-		*STATUS.lock().unwrap() = Some(status);
-		push_event("box_status_updated", vec![status.0.to_variant(), status.1.to_variant()]);
+		if *STATUS.lock().unwrap() != Some(status) {
+			*STATUS.lock().unwrap() = Some(status);
+			DELAIES.lock().unwrap().remove(&String::from("update_box_status"));
+			push_event("box_status_updated", vec![status.0.to_variant(), status.1.to_variant()]);
+		} else {
+			DELAIES.lock().unwrap().insert(String::from("update_box_status"), vec![
+				(2.0, Box::new(update_box_status)), (2.0, Box::new(update_box_status)), (2.0, Box::new(update_box_status))
+			]);
+		}
 	});
+}
+
+pub fn process_delay_funcs(delta_sec: f32) {
+	if let Ok(mut delaies) = DELAIES.try_lock() {
+		for (_, funcs) in &mut *delaies {
+			if let Some((delay, func)) = funcs.get_mut(0) {
+				*delay -= delta_sec;
+				if *delay < 0.0 {
+					func();
+				}
+				drop(funcs.remove(0));
+			}
+		}
+	}
 }
 
 pub fn push_event(name: &str, value: Vec<Variant>) {
@@ -150,4 +216,67 @@ pub fn init_panic_hook() {
             }
         }
     }));
+}
+
+pub fn add_hook_funcref(hook_name: &str, callback: Ref<FuncRef>) {
+	HOOKREFS.lock().unwrap().insert(String::from(hook_name), callback);
+}
+
+pub fn call_hook_funcref(hook_name: &str, params: Vec<Variant>) -> bool {
+	let hook_name = String::from(hook_name);
+	if let Some(callback) = HOOKREFS.lock().unwrap().get(&hook_name) {
+		unsafe { callback.assume_safe().call_func(params.as_slice()); }
+		HOOKREFS.lock().unwrap().remove(&hook_name);
+		true
+	} else {
+		false
+	}
+}
+
+pub fn set_mode(mode: P2pMode) {
+	*P2PMODE.lock().unwrap() = mode;
+}
+
+pub fn get_mode() -> P2pMode {
+	*P2PMODE.lock().unwrap()
+}
+
+pub fn close_kabletop_channel() -> Result<[u8; 32], String> {
+	match *P2PMODE.lock().unwrap() {
+		P2pMode::Client => client::close_kabletop_channel(),
+		P2pMode::Server => server::close_kabletop_channel(),
+		P2pMode::Empty  => Err(String::from("empty mode"))
+	}
+}
+
+pub fn sync_operation(code: String) -> Result<(), String> {
+	match *P2PMODE.lock().unwrap() {
+		P2pMode::Client => client::sync_operation(code),
+		P2pMode::Server => server::sync_operation(code),
+		P2pMode::Empty  => Err(String::from("empty mode"))
+	}
+}
+
+pub fn switch_round() -> Result<[u8; 65], String> {
+	match *P2PMODE.lock().unwrap() {
+		P2pMode::Client => client::switch_round(),
+		P2pMode::Server => server::switch_round(),
+		P2pMode::Empty  => Err(String::from("empty mode"))
+	}
+}
+
+pub fn notify_game_over() -> Result<[u8; 65], String> {
+	match *P2PMODE.lock().unwrap() {
+		P2pMode::Client => client::notify_game_over(),
+		P2pMode::Server => server::notify_game_over(),
+		P2pMode::Empty  => Err(String::from("empty mode"))
+	}
+}
+
+pub fn disconnect() -> Result<(), String> {
+	match *P2PMODE.lock().unwrap() {
+		P2pMode::Client => Ok(client::disconnect()),
+		P2pMode::Server => Ok(server::disconnect()),
+		P2pMode::Empty  => Err(String::from("empty mode"))
+	}
 }

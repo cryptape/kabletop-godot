@@ -15,8 +15,8 @@ lazy_static! {
 }
 
 // try to enstablish connection between client and server
-pub fn connect<F: Fn() + Send + 'static>(socket: &str, callback: F) -> bool {
-	let connection = Client::new(socket)
+pub fn connect<F: Fn() + Send + 'static>(socket: &str, callback: F) -> Result<(), String> {
+	let client = Client::new(socket)
 		.register("switch_round", reply::switch_round)
 		.register("sync_operation", reply::sync_operation)
 		.register("sync_p2p_message", reply::sync_p2p_message)
@@ -31,11 +31,12 @@ pub fn connect<F: Fn() + Send + 'static>(socket: &str, callback: F) -> bool {
 		.register_call("sync_p2p_message")
 		.register_call("notify_game_over")
 		.connect(100, callback);
-	if let Ok(conn) = connection {
-		*CLIENT.lock().unwrap() = Some(conn);
-		true
-	} else {
-		false
+	match client {
+		Ok(connection) => {
+			*CLIENT.lock().unwrap() = Some(connection);
+			Ok(())
+		},
+		Err(error) => Err(error.to_string())
 	}
 }
 

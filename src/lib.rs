@@ -2,7 +2,7 @@ use gdnative::prelude::*;
 use gdnative::api::*;
 use kabletop_godot_util::{
 	lua::highlevel::Lua, cache, ckb::*, p2p::{
-		client, hook, GodotType
+		client, server, hook, GodotType
 	}
 };
 use std::{
@@ -16,8 +16,7 @@ use helper::*;
 #[inherit(Node)]
 #[register_with(Self::register_signals)]
 struct Kabletop {
-	entry: String,
-	nfts:  Vec<String>
+	nfts: Vec<String>
 }
 
 #[gdnative::methods]
@@ -25,7 +24,7 @@ impl Kabletop {
     fn new(_owner: &Node) -> Self {
 		// turn all println! to godot_print!
 		*kabletop_godot_util::USE_GODOT.lock().unwrap() = true;
-		// set hook
+		// set hooks
 		hook::add("sync_operation", |operation| {
 			let value = String::from_utf8(operation.clone()).unwrap();
 			run_code(value);
@@ -33,14 +32,32 @@ impl Kabletop {
 		hook::add("switch_round", |signature| {
 			randomseed(signature);
 		});
+		hook::add("open_kabletop_channel", |hash| {
+			println!("[SERVER] receive open_kabletop_channel");
+			let store = cache::get_clone();
+			let mut ckb_time: i64 = 0;
+			for i in 0..8 {
+				ckb_time = (ckb_time << 8) | (store.script_hash[i] as i64 >> 1);
+			}
+			let mut ckb_clock: i64 = 0;
+			for i in 8..16 {
+				ckb_clock = (ckb_clock << 8) | (store.script_hash[i] as i64 >> 1);
+			}
+			let lua = Lua::new(ckb_time, ckb_clock);
+			lua.inject_nfts(from_nfts(store.opponent_nfts.clone()), from_nfts(store.user_nfts.clone()));
+			lua.boost(get_lua_entry());
+			set_lua(lua);
+			randomseed(hash);
+			call_hook_funcref("open_kabletop_channel", vec![true.to_variant(), hex::encode(hash).to_variant()]);
+		});
 		hook::add("game_over", |_| {
-			// TODO
+			godot_print!("[SERVER] receive game_over");
+		});
+		hook::add("close_kabletop_channel", |_| {
+			godot_print!("[SERVER] receive close_kabletop_channel");
 		});
 		// instance kabletop godot object
-        Kabletop {
-			entry: String::new(),
-			nfts:  vec![]
-		}
+        Kabletop { nfts: vec![] }
     }
 
 	fn register_signals(builder: &ClassBuilder<Self>) {
@@ -109,44 +126,36 @@ impl Kabletop {
     #[export]
     fn _ready(&mut self, owner: TRef<Node>) {
         godot_print!("welcome to the kabletop world!");
-		*EMITOR.lock().unwrap() = Some(owner.claim());
+		set_emitor(owner.claim());
 		update_owned_nfts();
 		update_box_status();
     }
 
 	#[export]
-	fn _process(&mut self, _owner: &Node, _delta: f32) {
+	fn _process(&mut self, _owner: &Node, delta: f32) {
 		if let Ok(mut events) = EVENTS.try_lock() {
-			for (name, value) in &*events {
-				let emitor = EMITOR.lock().unwrap();
-				if name == "owned_nfts_updated" {
-					self.nfts = vec![];
+			if let Some(emitor) = get_emitor() {
+				for (name, value) in &*events {
+					if name == "owned_nfts_updated" {
+						self.nfts = vec![];
+					}
+					unsafe { emitor.assume_safe().emit_signal(name, value.as_slice()); }
 				}
-				unsafe {
-					emitor
-						.as_ref()
-						.unwrap()
-						.assume_safe()
-						.emit_signal(name, value.as_slice());
-				}
+				(*events).clear();
 			}
-			(*events).clear();
 		}
 		if let Ok(mut funcrefs) = FUNCREFS.try_lock() {
 			for (callback, values) in &*funcrefs {
-				unsafe {
-					callback
-						.assume_safe()
-						.call_func(values);
-				}
+				unsafe { callback.assume_safe().call_func(values); }
 			}
 			(*funcrefs).clear();
 		}
+		process_delay_funcs(delta);
 	}
 
 	#[export]
 	fn set_entry(&mut self, _owner: &Node, entry: String) {
-		self.entry = entry;
+		set_lua_entry(entry);
 	}
 
 	#[export]
@@ -228,55 +237,96 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn create_channel(&self, _owner: &Node, socket: String, callback: Ref<FuncRef>) -> bool {
+	fn connect_to(&self, _owner: &Node, socket: String) -> Variant {
+		let result = client::connect(socket.as_str(), || {
+			unset_lua();
+			push_event("disconnect", vec![]);
+		});
+		if let Err(err) = result {
+			return err.to_variant();
+		}
+		set_mode(P2pMode::Client);
+		Variant::default()
+	}
+
+	#[export]
+	fn listen_at(&self, _owner: &Node, socket: String, role: i64, callback: Ref<FuncRef>) -> Variant {
+		cache::init(cache::PLAYER_TYPE::TWO);
+		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
+		let result = server::listen(socket.as_str(), move |client_connected| {
+			if client_connected {
+				cache::set_godot_callback("start_game", Box::new(move |_: String, _: HashMap<String, GodotType>| {
+					let mut response = HashMap::new();
+					response.insert(String::from("role"), GodotType::I64(role));
+					response
+				}));
+				add_hook_funcref("open_kabletop_channel", callback.clone());
+			} else {
+				cache::unset_godot_callback("start_game");
+				unset_lua();
+				push_event("disconnect", vec![]);
+			}
+		});
+		if let Err(err) = result {
+			return err.to_variant();
+		}
+		set_mode(P2pMode::Server);
+		Variant::default()
+	}
+
+	#[export]
+	fn shutdown(&self, _owner: &Node) {
+		disconnect().unwrap();
+	}
+
+	#[export]
+	fn create_channel(&self, _owner: &Node, callback: Ref<FuncRef>) -> Variant {
 		if self.nfts.len() == 0 {
-			return false;
+			return "empty nfts".to_variant();
+		}
+		if get_mode() != P2pMode::Client {
+			return "no client mode".to_variant();
 		}
 		cache::init(cache::PLAYER_TYPE::ONE);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
-		if !client::connect(socket.as_str(), || push_event("disconnect", vec![])) {
-			return false;
-		}
-		let lua_entry = self.entry.clone();
-		thread::spawn(move || {
-			// create kabletop channel
-			let hash = client::open_kabletop_channel().unwrap();
-			godot_print!("hash = {}", hex::encode(hash));
+		thread::spawn(move || match client::open_kabletop_channel() {
+			Ok(hash) => {
+				// create lua vm
+				let channel = cache::get_clone();
+				let mut ckb_time: i64 = 0;
+				for i in 0..8 {
+					ckb_time = (ckb_time << 8) | (channel.script_hash[i] as i64 >> 1);
+				}
+				let mut ckb_clock: i64 = 0;
+				for i in 8..16 {
+					ckb_clock = (ckb_clock << 8) | (channel.script_hash[i] as i64 >> 1);
+				}
+				let lua = Lua::new(ckb_time, ckb_clock);
+				lua.inject_nfts(from_nfts(channel.user_nfts.clone()), from_nfts(channel.opponent_nfts.clone()));
+				lua.boost(get_lua_entry());
+				set_lua(lua);
 
-			// create lua vm
-			let channel = cache::get_clone();
-			let mut ckb_time: i64 = 0;
-			for i in 0..8 {
-				ckb_time = (ckb_time << 8) | (channel.script_hash[i] as i64 >> 1);
+				// set first randomseed and callback to gdscript
+				randomseed(&hash);
+				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
+			},
+			Err(err) => {
+				FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), err.to_variant()]));
 			}
-			let mut ckb_clock: i64 = 0;
-			for i in 8..16 {
-				ckb_clock = (ckb_clock << 8) | (channel.script_hash[i] as i64 >> 1);
-			}
-			let lua = Lua::new(ckb_time, ckb_clock);
-			lua.inject_nfts(from_nfts(channel.user_nfts.clone()), from_nfts(channel.opponent_nfts.clone()));
-			lua.boost(lua_entry);
-			if let Some(old) = LUA.lock().unwrap().as_ref() {
-				old.close();
-			}
-			*LUA.lock().unwrap() = Some(lua);
-
-			// set first randomseed and callback to gdscript
-			randomseed(&hash);
-			FUNCREFS.lock().unwrap().push((callback, vec![]));
 		});
-		true
+		Variant::default()
 	}
 
 	#[export]
 	fn close_channel(&self, _owner: &Node, callback: Ref<FuncRef>) {
-		thread::spawn(move || {
-			match client::close_kabletop_channel() {
-				Ok(hash) => godot_print!("hash = {}", hex::encode(hash)),
-				Err(err) => godot_print!("{}", err)
-			};
-			client::disconnect();
-			FUNCREFS.lock().unwrap().push((callback, vec![]));
+		thread::spawn(move || match close_kabletop_channel() {
+			Ok(hash) => {
+				disconnect().unwrap();
+				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
+			},
+			Err(err) => {
+				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_variant()]));
+			}
 		});
 	}
 
@@ -284,7 +334,7 @@ impl Kabletop {
 	fn close_game(&self, _owner: &Node, winner: u8, callback: Ref<FuncRef>) {
 		cache::set_winner(winner);
 		thread::spawn(move || {
-			client::notify_game_over().unwrap();
+			notify_game_over().unwrap();
 			FUNCREFS.lock().unwrap().push((callback, vec![winner.to_variant()]));
 		});
 	}
@@ -293,9 +343,9 @@ impl Kabletop {
 	fn run(&self, _owner: &Node, code: String, terminal: bool) {
 		run_code(code.clone());
 		thread::spawn(move || {
-			client::sync_operation(code).unwrap();
+			sync_operation(code).unwrap();
 			if terminal {
-				let signature = client::switch_round().unwrap();
+				let signature = switch_round().unwrap();
 				randomseed(&signature);
 			}
 		});
@@ -303,9 +353,9 @@ impl Kabletop {
 
 	#[export]
 	fn reply_p2p_message(&self, _owner: &Node, message: String, callback: Ref<FuncRef>) {
-		cache::set_godot_callback(message, Box::new(move |protocol: String, parameters: HashMap<String, GodotType>| {
+		cache::set_godot_callback(message.as_str(), Box::new(move |protocol: String, parameters: HashMap<String, GodotType>| {
 			unsafe {
-				let values = Dictionary::new(); 
+				let values = Dictionary::new();
 				parameters
 					.iter()
 					.for_each(|(name, value)| {

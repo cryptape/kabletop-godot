@@ -41,7 +41,8 @@ pub mod request {
 	// winner requests to close channel in default
 	#[derive(Serialize, Deserialize)]
 	pub struct CloseChannel {
-		pub tx: TransactionView
+		pub tx:           TransactionView,
+		pub channel_hash: [u8; 32]
 	}
 
 	// round owner requests to end current round with all of operations made from it

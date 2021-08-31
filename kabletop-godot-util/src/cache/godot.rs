@@ -20,14 +20,20 @@ impl Default for GodotCache {
 	}
 }
 
-pub fn set_godot_callback<F>(message: String, callback: Box<F>)
+pub fn set_godot_callback<F>(message: &str, callback: Box<F>)
 where 
 	F: Fn(String, HashMap<String, GodotType>) -> HashMap<String, GodotType> + Send + 'static
 {
+	let message = String::from(message);
 	let mut godot = GODOT_CACHE.lock().unwrap();
 	if let Some(value) = godot.callbacks.get_mut(&message) {
 		*value = callback;
 	} else {
 		godot.callbacks.insert(message, callback);
 	}
+}
+
+pub fn unset_godot_callback(message: &str) {
+	let mut godot = GODOT_CACHE.lock().unwrap();
+	godot.callbacks.remove(&String::from(message));
 }

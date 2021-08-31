@@ -38,7 +38,6 @@ fn check_transaction_committed_or_not(hash: &H256) -> bool {
 
 pub mod send {
 	use super::*;
-    use ckb_jsonrpc_types::TransactionView;
 
 	// request a proposal of making consensus of channel parameters
 	pub fn propose_channel_parameter<T: Caller>(caller: &T) -> Result<(), String> {
@@ -119,16 +118,16 @@ pub mod send {
 		let store = cache::get_clone();
 		let tx = block_on(build_tx_close_channel(
 			store.script_args,
-			store.channel_hash,
+			store.channel_hash.clone(),
 			store.signed_rounds,
 			store.winner,
 			false
 		)).map_err(|err| format!("build_tx_close_channel -> {}", err))?;
 
 		// write tx to file for debug
-        let json_tx = TransactionView::from(tx.clone());
-        let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
-        std::fs::write("close_kabletop_channel.json", json).expect("write json file");
+        // let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
+        // let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
+        // std::fs::write("close_kabletop_channel.json", json).expect("write json file");
 
 		let hash = ckb::send_transaction(tx.data())
 			.map_err(|err| format!("send_transaction -> {}", err))?;
@@ -137,7 +136,8 @@ pub mod send {
 		}
 		let value: response::CloseChannel = caller.call(
 			"close_kabletop_channel", request::CloseChannel {
-				tx: tx.into()
+				tx:           tx.into(),
+				channel_hash: store.channel_hash
 			}).map_err(|err| format!("CloseChannel -> {}", err))?;
 		if !value.result {
 			return Err(String::from("opposite REFUSED to apply closing kabeltop channel"));
@@ -324,6 +324,9 @@ pub mod reply {
 	pub fn close_kabletop_channel(value: Value) -> Result<Value, String> {
 		let value: request::CloseChannel = from_value(value)
 			.map_err(|err| format!("deserialize close_kabletop_channel -> {}", err))?;
+		if cache::get_clone().channel_hash != value.channel_hash {
+			return Err(String::from("opposite and native kabletop_channel_tx_hash are mismatched"));
+		}
 		let hash = value.tx.hash;
 		let ok = check_transaction_committed_or_not(&hash);
 		trigger_hook("close_kabletop_channel", hash.as_bytes().to_vec());
@@ -408,9 +411,7 @@ pub mod reply {
 		let store = cache::GODOT_CACHE.lock().unwrap();
 		let mut result = None;
 		if let Some(callback) = store.callbacks.get(&value.message) {
-			result = Some(
-				callback(value.message.clone(), value.parameters)
-			)
+			result = Some(callback(value.message.clone(), value.parameters));
 		}
 		trigger_hook("sync_p2p_message", value.message.as_bytes().to_vec());
 		Ok(json!(response::ReplyP2pMessage {
