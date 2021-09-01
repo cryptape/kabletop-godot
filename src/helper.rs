@@ -2,7 +2,7 @@ use gdnative::prelude::*;
 use gdnative::api::*;
 use kabletop_godot_util::{
 	lua::highlevel::Lua, lua, ckb::*, p2p::{
-		client, server
+		client, server, GodotType
 	}
 };
 use std::{
@@ -224,9 +224,10 @@ pub fn add_hook_funcref(hook_name: &str, callback: Ref<FuncRef>) {
 
 pub fn call_hook_funcref(hook_name: &str, params: Vec<Variant>) -> bool {
 	let hook_name = String::from(hook_name);
-	if let Some(callback) = HOOKREFS.lock().unwrap().get(&hook_name) {
+	let mut refs = HOOKREFS.lock().unwrap();
+	if let Some(callback) = refs.get(&hook_name) {
 		unsafe { callback.assume_safe().call_func(params.as_slice()); }
-		HOOKREFS.lock().unwrap().remove(&hook_name);
+		refs.remove(&hook_name);
 		true
 	} else {
 		false
@@ -261,6 +262,16 @@ pub fn switch_round() -> Result<[u8; 65], String> {
 	match *P2PMODE.lock().unwrap() {
 		P2pMode::Client => client::switch_round(),
 		P2pMode::Server => server::switch_round(),
+		P2pMode::Empty  => Err(String::from("empty mode"))
+	}
+}
+
+pub fn sync_p2p_message(
+	message: String, parameters: HashMap<String, GodotType>
+) -> Result<(String, HashMap<String, GodotType>), String> {
+	match *P2PMODE.lock().unwrap() {
+		P2pMode::Client => client::sync_p2p_message(message, parameters),
+		P2pMode::Server => server::sync_p2p_message(message, parameters),
 		P2pMode::Empty  => Err(String::from("empty mode"))
 	}
 }

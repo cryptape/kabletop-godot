@@ -9,7 +9,7 @@ lazy_static! {
 
 // a cache to store variables for gdscript
 pub struct GodotCache {
-	pub callbacks: HashMap<String, Box<dyn Fn(String, HashMap<String, GodotType>) -> HashMap<String, GodotType> + Send + 'static>>
+	pub callbacks: HashMap<String, Box<dyn Fn(HashMap<String, GodotType>) -> HashMap<String, GodotType> + Send + 'static>>
 }
 
 impl Default for GodotCache {
@@ -22,7 +22,7 @@ impl Default for GodotCache {
 
 pub fn set_godot_callback<F>(message: &str, callback: Box<F>)
 where 
-	F: Fn(String, HashMap<String, GodotType>) -> HashMap<String, GodotType> + Send + 'static
+	F: Fn(HashMap<String, GodotType>) -> HashMap<String, GodotType> + Send + 'static
 {
 	let message = String::from(message);
 	let mut godot = GODOT_CACHE.lock().unwrap();

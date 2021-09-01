@@ -33,7 +33,6 @@ impl Kabletop {
 			randomseed(signature);
 		});
 		hook::add("open_kabletop_channel", |hash| {
-			println!("[SERVER] receive open_kabletop_channel");
 			let store = cache::get_clone();
 			let mut ckb_time: i64 = 0;
 			for i in 0..8 {
@@ -50,14 +49,10 @@ impl Kabletop {
 			randomseed(hash);
 			call_hook_funcref("open_kabletop_channel", vec![true.to_variant(), hex::encode(hash).to_variant()]);
 		});
-		hook::add("game_over", |_| {
-			godot_print!("[SERVER] receive game_over");
-		});
-		hook::add("close_kabletop_channel", |_| {
-			godot_print!("[SERVER] receive close_kabletop_channel");
-		});
 		// instance kabletop godot object
-        Kabletop { nfts: vec![] }
+        Kabletop {
+			nfts: vec![]
+		}
     }
 
 	fn register_signals(builder: &ClassBuilder<Self>) {
@@ -237,6 +232,11 @@ impl Kabletop {
 	}
 
 	#[export]
+	fn get_player_id(&self, _owner: &Node) -> i64 {
+		cache::get_clone().user_type as i64
+	}
+
+	#[export]
 	fn connect_to(&self, _owner: &Node, socket: String) -> Variant {
 		let result = client::connect(socket.as_str(), || {
 			unset_lua();
@@ -250,19 +250,13 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn listen_at(&self, _owner: &Node, socket: String, role: i64, callback: Ref<FuncRef>) -> Variant {
+	fn listen_at(&self, _owner: &Node, socket: String, callback: Ref<FuncRef>) -> Variant {
 		cache::init(cache::PLAYER_TYPE::TWO);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
 		let result = server::listen(socket.as_str(), move |client_connected| {
 			if client_connected {
-				cache::set_godot_callback("start_game", Box::new(move |_: String, _: HashMap<String, GodotType>| {
-					let mut response = HashMap::new();
-					response.insert(String::from("role"), GodotType::I64(role));
-					response
-				}));
 				add_hook_funcref("open_kabletop_channel", callback.clone());
 			} else {
-				cache::unset_godot_callback("start_game");
 				unset_lua();
 				push_event("disconnect", vec![]);
 			}
@@ -333,10 +327,15 @@ impl Kabletop {
 	#[export]
 	fn close_game(&self, _owner: &Node, winner: u8, callback: Ref<FuncRef>) {
 		cache::set_winner(winner);
-		thread::spawn(move || {
-			notify_game_over().unwrap();
-			FUNCREFS.lock().unwrap().push((callback, vec![winner.to_variant()]));
-		});
+		let store = cache::get_clone();
+		if store.round_owner == store.user_type {
+			thread::spawn(move || {
+				notify_game_over().unwrap();
+				FUNCREFS.lock().unwrap().push((callback, vec![winner.to_variant()]));
+			});
+		} else {
+			unsafe { callback.assume_safe().call_func(&[winner.to_variant()]); }
+		}
 	}
 
 	#[export]
@@ -353,7 +352,7 @@ impl Kabletop {
 
 	#[export]
 	fn reply_p2p_message(&self, _owner: &Node, message: String, callback: Ref<FuncRef>) {
-		cache::set_godot_callback(message.as_str(), Box::new(move |protocol: String, parameters: HashMap<String, GodotType>| {
+		cache::set_godot_callback(message.as_str(), Box::new(move |parameters: HashMap<String, GodotType>| {
 			unsafe {
 				let values = Dictionary::new();
 				parameters
@@ -370,7 +369,7 @@ impl Kabletop {
 					});
 				let result = callback
 					.assume_safe()
-					.call_func(&[protocol.to_variant(), values.into_shared().to_variant()]);
+					.call_func(&[values.into_shared().to_variant()]);
 				assert!(result.get_type() == VariantType::Dictionary);
 				let mut values = HashMap::new();
 				result
@@ -407,7 +406,7 @@ impl Kabletop {
 					};
 					values.insert(name.to_godot_string().to_string(), value);
 				});
-			let (message, parameters) = client::sync_p2p_message(message, values).unwrap();
+			let (message, parameters) = sync_p2p_message(message, values).unwrap();
 			let values = Dictionary::new(); 
 			parameters
 				.iter()

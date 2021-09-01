@@ -411,7 +411,7 @@ pub mod reply {
 		let store = cache::GODOT_CACHE.lock().unwrap();
 		let mut result = None;
 		if let Some(callback) = store.callbacks.get(&value.message) {
-			result = Some(callback(value.message.clone(), value.parameters));
+			result = Some(callback(value.parameters));
 		}
 		trigger_hook("sync_p2p_message", value.message.as_bytes().to_vec());
 		Ok(json!(response::ReplyP2pMessage {
