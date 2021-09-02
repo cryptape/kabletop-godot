@@ -57,8 +57,21 @@ impl Kabletop {
 
 	fn register_signals(builder: &ClassBuilder<Self>) {
         builder.add_signal(Signal {
-            name: "disconnect",
-            args: &[]
+            name: "connect_status",
+            args: &[
+				SignalArgument {
+					name: "mode",
+					default: Variant::default(),
+					export_info: ExportInfo::new(VariantType::GodotString),
+					usage: PropertyUsage::DEFAULT
+				},
+				SignalArgument {
+					name: "status",
+					default: Variant::default(),
+					export_info: ExportInfo::new(VariantType::Bool),
+					usage: PropertyUsage::DEFAULT
+				}
+            ]
         });
         builder.add_signal(Signal {
             name: "lua_events",
@@ -185,6 +198,22 @@ impl Kabletop {
 	}
 
 	#[export]
+	fn get_nfts_count(&self, _owner: &Node, player_id: u8) -> usize {
+		let store = cache::get_clone();
+		if player_id > 0 {
+			if player_id == store.user_type {
+				store.user_nfts.len()
+			} else if player_id == store.opponent_type {
+				store.opponent_nfts.len()
+			} else {
+				panic!("unknown player_id {}", player_id);
+			} 
+		} else {
+			self.nfts.len()
+		}
+	}
+
+	#[export]
 	fn delete_nfts(&mut self, _owner: &Node, nfts: Dictionary, callback: Ref<FuncRef>) {
 		let nfts = nfts
 			.iter()
@@ -240,12 +269,13 @@ impl Kabletop {
 	fn connect_to(&self, _owner: &Node, socket: String) -> Variant {
 		let result = client::connect(socket.as_str(), || {
 			unset_lua();
-			push_event("disconnect", vec![]);
+			push_event("connect_status", vec!["CLIENT".to_variant(), false.to_variant()]);
 		});
 		if let Err(err) = result {
 			return err.to_variant();
 		}
 		set_mode(P2pMode::Client);
+		push_event("connect_status", vec!["CLIENT".to_variant(), true.to_variant()]);
 		Variant::default()
 	}
 
@@ -256,9 +286,10 @@ impl Kabletop {
 		let result = server::listen(socket.as_str(), move |client_connected| {
 			if client_connected {
 				add_hook_funcref("open_kabletop_channel", callback.clone());
+				push_event("connect_status", vec!["SERVER".to_variant(), true.to_variant()]);
 			} else {
 				unset_lua();
-				push_event("disconnect", vec![]);
+				push_event("connect_status", vec!["SERVER".to_variant(), false.to_variant()]);
 			}
 		});
 		if let Err(err) = result {
