@@ -21,8 +21,10 @@ use ckb_types::{
 use std::{
 	thread, time, collections::HashMap, sync::Mutex, convert::TryInto
 };
+use futures::{
+	executor::block_on, future::BoxFuture
+};
 use ckb_crypto::secp::Signature;
-use futures::executor::block_on;
 use molecule::prelude::Entity as MolEntity;
 
 fn check_transaction_committed_or_not(hash: &H256) -> bool {
@@ -251,172 +253,188 @@ pub mod reply {
 	}
 
 	// response proposal of confirmation of channel parameters
-	pub fn propose_channel_parameter(value: Value) -> Result<Value, String> {
-		let value: request::ProposeGameParameter = from_value(value)
-			.map_err(|err| format!("deserialize ProposeGameParameter -> {}", err))?;
-		let store = cache::get_clone();
-		trigger_hook("propose_channel_parameter", vec![]);
-		Ok(json!(response::ApproveGameParameter {
-			result: value.staking_ckb == store.staking_ckb && value.bet_ckb == store.bet_ckb
-		}))
+	pub fn propose_channel_parameter(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::ProposeGameParameter = from_value(value)
+				.map_err(|err| format!("deserialize ProposeGameParameter -> {}", err))?;
+			let store = cache::get_clone();
+			trigger_hook("propose_channel_parameter", vec![]);
+			Ok(json!(response::ApproveGameParameter {
+				result: value.staking_ckb == store.staking_ckb && value.bet_ckb == store.bet_ckb
+			}))
+		})
 	}
 
 	// response operation of openning kabletop channel
-	pub fn prepare_kabletop_channel(value: Value) -> Result<Value, String> {
-		let value: request::PrepareChannel = from_value(value)
-			.map_err(|err| format!("deserialize PrepareChannel -> {}", err))?;
-		let store = cache::get_clone();
-		let hashes = store.luacode_hashes
-			.iter()
-			.map(|&v| v.pack())
-			.collect::<Vec<_>>();
-		let tx = {
-			let tx: Transaction = value.tx.inner.into();
-			tx.into_view()
-		};
-		let lock_args: Vec<u8> = tx.output(0).unwrap().lock().args().unpack();
-		let kabletop_args = Args::new_unchecked(lock_args.into());
-		cache::set_opponent_pkhash(kabletop_args.user1_pkhash().into());
-		cache::set_opponent_nfts(kabletop_args.user1_nfts().into());
-		let tx = block_on(channel::complete_channel_tx(
-			tx.into(),
-			store.staking_ckb,
-			store.bet_ckb,
-			store.max_nfts_count,
-			store.user_nfts.clone(),
-			store.user_pkhash,
-			hashes
-		)).map_err(|err| format!("complete_channel_tx -> {}", err))?;
-		let tx = channel::sign_channel_tx(
-			tx,
-			store.staking_ckb,
-			store.bet_ckb,
-			store.max_nfts_count,
-			store.user_nfts,
-			&VARS.common.user_key.privkey
-		).map_err(|err| format!("sign_channel_tx -> {}", err))?;
-		let kabletop = tx.output(0).unwrap();
-		cache::set_channel_verification(
-			tx.hash().unpack(),
-			kabletop.calc_lock_hash().unpack(),
-			kabletop.lock().args().raw_data().to_vec(),
-			kabletop.capacity().unpack()
-		);
-		trigger_hook("prepare_kabletop_channel", tx.data().as_slice().to_vec());
-		Ok(json!(response::CompleteAndSignChannel {
-			tx: tx.into()
-		}))
+	pub fn prepare_kabletop_channel(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::PrepareChannel = from_value(value)
+				.map_err(|err| format!("deserialize PrepareChannel -> {}", err))?;
+			let store = cache::get_clone();
+			let hashes = store.luacode_hashes
+				.iter()
+				.map(|&v| v.pack())
+				.collect::<Vec<_>>();
+			let tx = {
+				let tx: Transaction = value.tx.inner.into();
+				tx.into_view()
+			};
+			let lock_args: Vec<u8> = tx.output(0).unwrap().lock().args().unpack();
+			let kabletop_args = Args::new_unchecked(lock_args.into());
+			cache::set_opponent_pkhash(kabletop_args.user1_pkhash().into());
+			cache::set_opponent_nfts(kabletop_args.user1_nfts().into());
+			let tx = channel::complete_channel_tx(
+				tx.into(),
+				store.staking_ckb,
+				store.bet_ckb,
+				store.max_nfts_count,
+				store.user_nfts.clone(),
+				store.user_pkhash,
+				hashes
+			).await.map_err(|err| format!("complete_channel_tx -> {}", err))?;
+			let tx = channel::sign_channel_tx(
+				tx,
+				store.staking_ckb,
+				store.bet_ckb,
+				store.max_nfts_count,
+				store.user_nfts,
+				&VARS.common.user_key.privkey
+			).map_err(|err| format!("sign_channel_tx -> {}", err))?;
+			let kabletop = tx.output(0).unwrap();
+			cache::set_channel_verification(
+				tx.hash().unpack(),
+				kabletop.calc_lock_hash().unpack(),
+				kabletop.lock().args().raw_data().to_vec(),
+				kabletop.capacity().unpack()
+			);
+			trigger_hook("prepare_kabletop_channel", tx.data().as_slice().to_vec());
+			Ok(json!(response::CompleteAndSignChannel {
+				tx: tx.into()
+			}))
+		})
 	}
 
 	// response operation of submitting open_kabletop_channel transaction
-	pub fn open_kabletop_channel(value: Value) -> Result<Value, String> {
-		let value: request::SignAndSubmitChannel = from_value(value)
-			.map_err(|err| format!("deserialize open_kabletop_channel -> {}", err))?;
-		let hash = value.tx.hash;
-		let ok = check_transaction_committed_or_not(&hash);
-		trigger_hook("open_kabletop_channel", hash.as_bytes().to_vec());
-		Ok(json!(response::OpenChannel {
-			result: ok
-		}))
+	pub fn open_kabletop_channel(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::SignAndSubmitChannel = from_value(value)
+				.map_err(|err| format!("deserialize open_kabletop_channel -> {}", err))?;
+			let hash = value.tx.hash;
+			let ok = check_transaction_committed_or_not(&hash);
+			trigger_hook("open_kabletop_channel", hash.as_bytes().to_vec());
+			Ok(json!(response::OpenChannel {
+				result: ok
+			}))
+		})
 	}
 
 	// response operation of submitting close_kabletop_channel transaction
-	pub fn close_kabletop_channel(value: Value) -> Result<Value, String> {
-		let value: request::CloseChannel = from_value(value)
-			.map_err(|err| format!("deserialize close_kabletop_channel -> {}", err))?;
-		if cache::get_clone().channel_hash != value.channel_hash {
-			return Err(String::from("opposite and native kabletop_channel_tx_hash are mismatched"));
-		}
-		let hash = value.tx.hash;
-		let ok = check_transaction_committed_or_not(&hash);
-		trigger_hook("close_kabletop_channel", hash.as_bytes().to_vec());
-		Ok(json!(response::CloseChannel {
-			result: ok
-		}))
+	pub fn close_kabletop_channel(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::CloseChannel = from_value(value)
+				.map_err(|err| format!("deserialize close_kabletop_channel -> {}", err))?;
+			if cache::get_clone().channel_hash != value.channel_hash {
+				return Err(String::from("opposite and native kabletop_channel_tx_hash are mismatched"));
+			}
+			let hash = value.tx.hash;
+			let ok = check_transaction_committed_or_not(&hash);
+			trigger_hook("close_kabletop_channel", hash.as_bytes().to_vec());
+			Ok(json!(response::CloseChannel {
+				result: ok
+			}))
+		})
 	}
 
 	// response verification of wether game has finished 
-	pub fn notify_game_over(value: Value) -> Result<Value, String> {
-		let value: request::CloseGame = from_value(value)
-			.map_err(|err| format!("deserialize verify_game_over -> {}", err))?;
-		let store = cache::get_clone();
-		if value.round != store.round {
-			return Err(String::from("opposite round exceeds native round"));
-		} else if value.operations != store.opponent_operations {
-			return Err(String::from("opposite and native operations are mismatched"));
-		} else if store.winner == 0 {
-			return Err(String::from("native winner hasn't been set"));
-		}
-		let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
-		let signature = channel::sign_channel_round(
-			store.script_hash.pack(),
-			store.capacity,
-			store.signed_rounds,
-			next_round,
-			&VARS.common.user_key.privkey
-		).map_err(|err| format!("sign_channel_round -> {}", err))?;
-		cache::commit_opponent_round(signature.clone());
-		trigger_hook("game_over", vec![store.winner]);
-		Ok(json!(response::CloseGame {
-			result:    true,
-			signature: signature.serialize().pack().into()
-		}))
+	pub fn notify_game_over(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::CloseGame = from_value(value)
+				.map_err(|err| format!("deserialize verify_game_over -> {}", err))?;
+			let store = cache::get_clone();
+			if value.round != store.round {
+				return Err(String::from("opposite round exceeds native round"));
+			} else if value.operations != store.opponent_operations {
+				return Err(String::from("opposite and native operations are mismatched"));
+			} else if store.winner == 0 {
+				return Err(String::from("native winner hasn't been set"));
+			}
+			let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
+			let signature = channel::sign_channel_round(
+				store.script_hash.pack(),
+				store.capacity,
+				store.signed_rounds,
+				next_round,
+				&VARS.common.user_key.privkey
+			).map_err(|err| format!("sign_channel_round -> {}", err))?;
+			cache::commit_opponent_round(signature.clone());
+			trigger_hook("game_over", vec![store.winner]);
+			Ok(json!(response::CloseGame {
+				result:    true,
+				signature: signature.serialize().pack().into()
+			}))
+		})
 	}
 
 	// response operation of switching kabletop round
-	pub fn switch_round(value: Value) -> Result<Value, String> {
-		let value: request::CloseRound = from_value(value)
-			.map_err(|err| format!("deserialize switch_round -> {}", err))?;
-		let store = cache::get_clone();
-		if value.round != store.round {
-			return Err(String::from("opposite round exceeds native round"));
-		} else if value.operations != store.opponent_operations {
-			return Err(String::from("opposite and native operations are mismatched"));
-		}
-		let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
-		let signature = channel::sign_channel_round(
-			store.script_hash.pack(),
-			store.capacity,
-			store.signed_rounds,
-			next_round,
-			&VARS.common.user_key.privkey
-		).map_err(|err| format!("sign_channel_round -> {}", err))?;
-		cache::commit_opponent_round(signature.clone());
-		trigger_hook("switch_round", signature.serialize());
-		Ok(json!(response::OpenRound {
-			round:     store.round + 1,
-			signature: signature.serialize().pack().into()
-		}))
+	pub fn switch_round(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::CloseRound = from_value(value)
+				.map_err(|err| format!("deserialize switch_round -> {}", err))?;
+			let store = cache::get_clone();
+			if value.round != store.round {
+				return Err(String::from("opposite round exceeds native round"));
+			} else if value.operations != store.opponent_operations {
+				return Err(String::from("opposite and native operations are mismatched"));
+			}
+			let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
+			let signature = channel::sign_channel_round(
+				store.script_hash.pack(),
+				store.capacity,
+				store.signed_rounds,
+				next_round,
+				&VARS.common.user_key.privkey
+			).map_err(|err| format!("sign_channel_round -> {}", err))?;
+			cache::commit_opponent_round(signature.clone());
+			trigger_hook("switch_round", signature.serialize());
+			Ok(json!(response::OpenRound {
+				round:     store.round + 1,
+				signature: signature.serialize().pack().into()
+			}))
+		})
 	}
 
 	// accept operations generated from current round
-	pub fn sync_operation(value: Value) -> Result<Value, String> {
-		let value: request::PushOperation = from_value(value)
-			.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
-		let store = cache::get_clone();
-		if value.round != store.round {
-			return Err(String::from("client and server round are mismatched"));
-		}
-		cache::commit_round_operation(value.operation.clone());
-		trigger_hook("sync_operation", value.operation.as_bytes().to_vec());
-		Ok(json!(response::ApplyOperation {
-			result: true
-		}))
+	pub fn sync_operation(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::PushOperation = from_value(value)
+				.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
+			let store = cache::get_clone();
+			if value.round != store.round {
+				return Err(String::from("client and server round are mismatched"));
+			}
+			cache::commit_round_operation(value.operation.clone());
+			trigger_hook("sync_operation", value.operation.as_bytes().to_vec());
+			Ok(json!(response::ApplyOperation {
+				result: true
+			}))
+		})
 	}
 
 	// accept user-defined godot message and reply in a same type
-	pub fn sync_p2p_message(value: Value) -> Result<Value, String> {
-		let value: request::SendP2pMessage = from_value(value)
-			.map_err(|err| format!("deserialize PushP2pMessage -> {}", err))?;
-		let store = cache::GODOT_CACHE.lock().unwrap();
-		let mut result = None;
-		if let Some(callback) = store.callbacks.get(&value.message) {
-			result = Some(callback(value.parameters));
-		}
-		trigger_hook("sync_p2p_message", value.message.as_bytes().to_vec());
-		Ok(json!(response::ReplyP2pMessage {
-			message:    value.message,
-			parameters: result.unwrap_or(HashMap::new())
-		}))
+	pub fn sync_p2p_message(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let value: request::SendP2pMessage = from_value(value)
+				.map_err(|err| format!("deserialize PushP2pMessage -> {}", err))?;
+			let store = cache::GODOT_CACHE.lock().unwrap();
+			let mut result = None;
+			if let Some(callback) = store.callbacks.get(&value.message) {
+				result = Some(callback(value.parameters));
+			}
+			trigger_hook("sync_p2p_message", value.message.as_bytes().to_vec());
+			Ok(json!(response::ReplyP2pMessage {
+				message:    value.message,
+				parameters: result.unwrap_or(HashMap::new())
+			}))
+		})
 	}
 }

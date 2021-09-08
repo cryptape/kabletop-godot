@@ -102,7 +102,7 @@ where
 				FUNCREFS.lock().unwrap().push((callback.clone(), vec![true.to_variant(), hex::encode(hash).to_variant()]));
 			},
 			Err(err) => {
-				f();
+				// f();
 				FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), err.to_string().to_variant()]));
 			}
 		}
@@ -187,6 +187,35 @@ pub fn from_nfts(value: Vec<[u8; 20]>) -> Vec<String> {
 		.iter()
 		.map(|v| hex::encode(v))
 		.collect::<_>()
+}
+
+pub fn into_dictionary(value: &Vec<String>) -> Dictionary {
+	if !value.is_empty() {
+		let mut last_nft = value[0].clone();
+		let mut count = 0;
+		let nfts = Dictionary::new();
+		for nft in value {
+			if &last_nft == nft {
+				count += 1;
+			} else {
+				nfts.insert(last_nft, count);
+				last_nft = nft.clone();
+				count = 1;
+			}
+		}
+		nfts.insert(last_nft, count);
+		nfts.into_shared()
+	} else {
+		Dictionary::new_shared()
+	}
+}
+
+pub fn from_dictionary(value: Dictionary) -> Vec<String> {
+	value
+		.iter()
+		.map(|(nft, count)| vec![nft.to_string(); count.to_u64() as usize])
+		.collect::<Vec<_>>()
+		.concat()
 }
 
 pub fn init_panic_hook() {

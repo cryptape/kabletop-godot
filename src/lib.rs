@@ -135,7 +135,7 @@ impl Kabletop {
     fn _ready(&mut self, owner: TRef<Node>) {
         godot_print!("welcome to the kabletop world!");
 		set_emitor(owner.claim());
-		update_owned_nfts();
+		// update_owned_nfts();
 		update_box_status();
     }
 
@@ -177,24 +177,7 @@ impl Kabletop {
 
 	#[export]
 	fn get_nfts(&self, _owner: &Node) -> Dictionary {
-		if self.nfts.len() > 0 {
-			let mut last_nft = self.nfts[0].clone();
-			let mut count = 0;
-			let nfts = Dictionary::new();
-			for nft in &self.nfts {
-				if &last_nft == nft {
-					count += 1;
-				} else {
-					nfts.insert(last_nft, count);
-					last_nft = nft.clone();
-					count = 1;
-				}
-			}
-			nfts.insert(last_nft, count);
-			nfts.into_shared()
-		} else {
-			Dictionary::new_shared()
-		}
+		into_dictionary(&self.nfts)
 	}
 
 	#[export]
@@ -215,13 +198,25 @@ impl Kabletop {
 
 	#[export]
 	fn delete_nfts(&mut self, _owner: &Node, nfts: Dictionary, callback: Ref<FuncRef>) {
-		let nfts = nfts
-			.iter()
-			.map(|(nft, count)| vec![nft.to_string(); count.to_u64() as usize])
-			.collect::<Vec<_>>()
-			.concat();
-		if nfts.len() > 0 {
-			discard_nfts(&nfts, handle_transaction(update_owned_nfts, callback));
+		let nfts = from_dictionary(nfts);
+		if !nfts.is_empty() {
+			discard_nfts(nfts, handle_transaction(update_owned_nfts, callback));
+		}
+	}
+
+	#[export]
+	fn transfer_nfts(&self, _owner: &Node, nfts: Dictionary, to: String, callback: Ref<FuncRef>) {
+		let nfts = from_dictionary(nfts);
+		if !nfts.is_empty() {
+			transfer_nfts(nfts, to, handle_transaction(update_owned_nfts, callback));
+		}
+	}
+
+	#[export]
+	fn issue_nfts(&self, _owner: &Node, nfts: Dictionary, callback: Ref<FuncRef>) {
+		let nfts = from_dictionary(nfts);
+		if !nfts.is_empty() {
+			issue_nfts(nfts, handle_transaction(update_owned_nfts, callback));
 		}
 	}
 
@@ -244,8 +239,13 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn get_owned_nfts(&self, _owner: &Node) -> Option<Variant> {
-		(*NFTS.lock().unwrap()).clone()
+	fn get_owned_nfts(&self, _owner: &Node, from_cache: bool) -> Option<Variant> {
+		if from_cache {
+			(*NFTS.lock().unwrap()).clone()
+		} else {
+			update_owned_nfts();
+			None
+		}
 	}
 
 	#[export]
