@@ -113,15 +113,23 @@ pub fn update_owned_nfts() {
 	thread::spawn(|| {
 		let nfts = {
 			let nfts = Dictionary::new();
-			for (nft, count) in owned_nfts().expect("get owned nfts") {
-				nfts.insert(nft, count.to_variant());
+			match owned_nfts() {
+				Ok(owned_nfts) => {
+					for (nft, count) in owned_nfts {
+						nfts.insert(nft, count.to_variant());
+					}
+					Some(nfts.into_shared().to_variant())
+				},
+				Err(err) => {
+					godot_print!("update_owned_nfts error: {}", err);
+					None
+				}
 			}
-			nfts.into_shared()
 		};
-		if *NFTS.lock().unwrap() != Some(nfts.to_variant()) {
-			*NFTS.lock().unwrap() = Some(nfts.to_variant());
+		if *NFTS.lock().unwrap() != nfts {
+			*NFTS.lock().unwrap() = nfts.clone();
 			DELAIES.lock().unwrap().remove(&String::from("update_owned_nfts"));
-			push_event("owned_nfts_updated", vec![nfts.to_variant()]);
+			push_event("owned_nfts_updated", vec![nfts.unwrap_or_default()]);
 		} else {
 			DELAIES.lock().unwrap().insert(String::from("update_owned_nfts"), vec![
 				(2.0, Box::new(update_owned_nfts)), (2.0, Box::new(update_owned_nfts)), (2.0, Box::new(update_owned_nfts))
@@ -135,7 +143,7 @@ pub fn update_box_status() {
 		let mut status = (0, true);
 		match wallet_status() {
 			Ok((count, ready)) => status = (count, ready),
-			Err(err)           => godot_print!("{}", err)
+			Err(err)           => godot_print!("update_box_status error: {}", err)
 		}
 		if *STATUS.lock().unwrap() != Some(status) {
 			*STATUS.lock().unwrap() = Some(status);

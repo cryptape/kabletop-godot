@@ -27,7 +27,7 @@ pub fn owned_nfts() -> Result<HashMap<String, u32>, String> {
         let wallet = wallet_script(keystore::COMPOSER_PUBHASH.to_vec());
         nft_script(wallet.calc_script_hash().raw_data().to_vec())
     };
-	let nfts = block_on(get_live_nfts(lock_script, Some(type_script), 10))
+	let nfts = block_on(get_live_nfts(lock_script, Some(type_script), 20))
 		.map_err(|e| e.to_string())?
 		.iter()
 		.map(|(hash, &value)| {
