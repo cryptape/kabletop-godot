@@ -176,6 +176,11 @@ impl Kabletop {
 	}
 
 	#[export]
+	fn set_round(&self, _owner: &Node, round: u8, actor: u8) {
+		cache::set_round_status(round, actor);
+	}
+
+	#[export]
 	fn get_nfts(&self, _owner: &Node) -> Dictionary {
 		into_dictionary(&self.nfts)
 	}
@@ -361,24 +366,43 @@ impl Kabletop {
 		let store = cache::get_clone();
 		if store.round_owner == store.user_type {
 			thread::spawn(move || {
-				notify_game_over().unwrap();
-				FUNCREFS.lock().unwrap().push((callback, vec![winner.to_variant()]));
+				if let Err(error) = notify_game_over() {
+					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
+				} else {
+					FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), winner.to_variant()]));
+				}
 			});
 		} else {
-			unsafe { callback.assume_safe().call_func(&[winner.to_variant()]); }
+			unsafe { callback.assume_safe().call_func(&[true.to_variant(), winner.to_variant()]); }
 		}
 	}
 
 	#[export]
-	fn run(&self, _owner: &Node, code: String, terminal: bool) {
-		run_code(code.clone());
+	fn sync(&self, _owner: &Node, code: String, terminal: bool, callback: Ref<FuncRef>) {
 		thread::spawn(move || {
-			sync_operation(code).unwrap();
+			if let Err(error) = sync_operation(code) {
+				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
+				return
+			}
 			if terminal {
-				let signature = switch_round().unwrap();
-				randomseed(&signature);
+				match switch_round() {
+					Ok(signature) => {
+						randomseed(&signature);
+						FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), Variant::default()]));
+					},
+					Err(error) => {
+						FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
+					}
+				}
+			} else {
+				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), Variant::default()]));
 			}
 		});
+	}
+
+	#[export]
+	fn run(&self, _owner: &Node, code: String) {
+		run_code(code);
 	}
 
 	#[export]

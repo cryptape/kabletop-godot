@@ -31,7 +31,6 @@ pub struct ChannelCache {
 	pub opponent_nfts:   Vec<[u8; 20]>,
 	pub user_pkhash:     [u8; 20],
 	pub opponent_pkhash: [u8; 20],
-	pub luacode_hashes:  Vec<[u8; 32]>,
 
 	// for kabletop round
 	pub winner:              u8,
@@ -58,7 +57,6 @@ impl Default for ChannelCache {
 			opponent_nfts:       vec![],
 			user_pkhash:         VARS.common.user_key.pubhash.clone(),
 			opponent_pkhash:     [0u8; 20],
-			luacode_hashes:      vec![],
 			winner:              0,
 			round:               0,
 			round_owner:         0,
@@ -76,18 +74,20 @@ pub fn init(player_type: PLAYER_TYPE) {
 	*channel = ChannelCache::default();
 	match player_type {
 		PLAYER_TYPE::ONE => {
-			channel.round = 1;
 			channel.user_type = 1;
 			channel.opponent_type = 2;
-			channel.round_owner = channel.user_type;
 		},
 		PLAYER_TYPE::TWO => {
-			channel.round = 1;
 			channel.user_type = 2;
 			channel.opponent_type = 1;
-			channel.round_owner = channel.opponent_type;
 		}
 	}
+}
+
+pub fn set_round_status(count: u8, owner: u8) {
+	let mut channel = CHANNEL_CACHE.lock().unwrap();
+	channel.round = count;
+	channel.round_owner = owner;
 }
 
 pub fn set_staking_and_bet_ckb(staking: u64, bet: u64) {
@@ -126,33 +126,26 @@ pub fn set_opponent_pkhash(pkhash: [u8; 20]) {
 
 pub fn commit_user_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	assert!(channel.round_owner == channel.user_type);
 	let round = make_round(channel.user_type, channel.user_operations.clone());
-	channel.round += 1;
-	channel.round_owner = channel.opponent_type;
 	channel.signed_rounds.push((round, signature));
 	channel.user_operations = vec![];
 }
 
 pub fn commit_opponent_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	assert!(channel.round_owner == channel.opponent_type);
 	let round = make_round(channel.opponent_type, channel.opponent_operations.clone());
-	channel.round += 1;
-	channel.round_owner = channel.user_type;
 	channel.signed_rounds.push((round, signature));
 	channel.opponent_operations = vec![];
 }
 
-pub fn commit_round_operation(operation: String) {
+pub fn commit_user_operation(operation: String) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	if channel.round_owner == channel.user_type {
-		channel.user_operations.push(operation);
-	} else if channel.round_owner == channel.opponent_type {
-		channel.opponent_operations.push(operation);
-	} else {
-		panic!("uninited channel cache");
-	}
+	channel.user_operations.push(operation);
+}
+
+pub fn commit_opponent_operation(operation: String) {
+	let mut channel = CHANNEL_CACHE.lock().unwrap();
+	channel.opponent_operations.push(operation);
 }
 
 pub fn get_clone() -> ChannelCache {

@@ -61,9 +61,10 @@ pub mod send {
 		if store.user_nfts.len() == 0 {
 			return Err(String::from("playing nfts need to be set before"));
 		}
-		let hashes = store.luacode_hashes
+		let hashes = VARS
+			.luacodes
 			.iter()
-			.map(|&value| value.pack())
+			.map(|value| value.data_hash.clone())
 			.collect::<Vec<_>>();
 		let tx = block_on(channel::prepare_channel_tx(
 			store.staking_ckb,
@@ -178,7 +179,7 @@ pub mod send {
 				round:      store.round,
 				operations: store.user_operations.clone()
 			}).map_err(|err| format!("CloseRound -> {}", err))?;
-		if value.round != store.round + 1 {
+		if value.round != store.round {
 			return Err(format!("opposite round count({}) mismatched native round count({})", value.round, store.round));
 		}
 		let signature = Signature::from_slice(value.signature.as_bytes())
@@ -202,7 +203,7 @@ pub mod send {
 				operation: operation.clone()
 			}).map_err(|err| format!("PushOperation -> {}", err))?;
 		if value.result {
-			cache::commit_round_operation(operation);
+			cache::commit_user_operation(operation);
 		} else {
 			return Err(String::from("opposite REFUSED applying round operation"));
 		}
@@ -271,9 +272,10 @@ pub mod reply {
 			let value: request::PrepareChannel = from_value(value)
 				.map_err(|err| format!("deserialize PrepareChannel -> {}", err))?;
 			let store = cache::get_clone();
-			let hashes = store.luacode_hashes
+			let hashes = VARS
+				.luacodes
 				.iter()
-				.map(|&v| v.pack())
+				.map(|v| v.data_hash.clone())
 				.collect::<Vec<_>>();
 			let tx = {
 				let tx: Transaction = value.tx.inner.into();
@@ -350,13 +352,24 @@ pub mod reply {
 		Box::pin(async {
 			let value: request::CloseGame = from_value(value)
 				.map_err(|err| format!("deserialize verify_game_over -> {}", err))?;
-			let store = cache::get_clone();
+			let mut store = cache::get_clone();
 			if value.round != store.round {
 				return Err(String::from("opposite round exceeds native round"));
 			} else if value.operations != store.opponent_operations {
 				return Err(String::from("opposite and native operations are mismatched"));
 			} else if store.winner == 0 {
-				return Err(String::from("native winner hasn't been set"));
+				let mut ok = false;
+				for _ in 0..5 {
+					store = cache::get_clone();
+					if store.winner != 0 {
+						ok = true;
+						break
+					}
+					thread::sleep(time::Duration::from_secs(1));
+				}
+				if !ok {
+					return Err(String::from("native winner hasn't been set"));
+				}
 			}
 			let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
 			let signature = channel::sign_channel_round(
@@ -397,7 +410,7 @@ pub mod reply {
 			cache::commit_opponent_round(signature.clone());
 			trigger_hook("switch_round", signature.serialize());
 			Ok(json!(response::OpenRound {
-				round:     store.round + 1,
+				round:     store.round,
 				signature: signature.serialize().pack().into()
 			}))
 		})
@@ -410,9 +423,9 @@ pub mod reply {
 				.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
 			let store = cache::get_clone();
 			if value.round != store.round {
-				return Err(String::from("client and server round are mismatched"));
+				println!("CAUTION: sync_operation => client and server round are mismatched");
 			}
-			cache::commit_round_operation(value.operation.clone());
+			cache::commit_opponent_operation(value.operation.clone());
 			trigger_hook("sync_operation", value.operation.as_bytes().to_vec());
 			Ok(json!(response::ApplyOperation {
 				result: true
