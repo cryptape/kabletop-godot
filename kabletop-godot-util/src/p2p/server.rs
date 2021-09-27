@@ -7,7 +7,7 @@ use crate::p2p::{
 	}
 };
 use std::{
-	sync::Mutex, collections::HashMap
+	sync::Mutex, collections::HashMap, sync::mpsc::Receiver
 };
 
 lazy_static! {
@@ -15,7 +15,10 @@ lazy_static! {
 }
 
 // start p2p server and listen connections
-pub fn listen<F: Fn(bool) + Send + 'static>(socket: &str, callback: F) -> Result<(), String> {
+pub fn listen<F>(socket: &str, callback: F) -> Result<(), String>
+where
+	F: Fn(i32, Option<HashMap<String, Receiver<String>>>) + Send + Sync + 'static
+{
 	let server = Server::new(socket)
 		.register("propose_channel_parameter", reply::propose_channel_parameter)
 		.register("prepare_kabletop_channel", reply::prepare_kabletop_channel)
@@ -30,7 +33,7 @@ pub fn listen<F: Fn(bool) + Send + 'static>(socket: &str, callback: F) -> Result
 		.register_call("sync_operation")
 		.register_call("sync_p2p_message")
 		.register_call("notify_game_over")
-		.listen(100, callback);
+		.listen(100, 1, callback);
 	match server {
 		Ok(listening) => {
 			*SERVER.lock().unwrap() = Some(listening);
@@ -42,6 +45,14 @@ pub fn listen<F: Fn(bool) + Send + 'static>(socket: &str, callback: F) -> Result
 
 pub fn disconnect() {
 	SERVER.lock().unwrap().as_ref().unwrap().shutdown();
+}
+
+pub fn change_client(client_id: i32) {
+	SERVER.lock().unwrap().as_mut().unwrap().set_id(client_id);
+}
+
+pub fn set_client_receivers(client_id: i32, receivers: HashMap<String, Receiver<String>>) {
+	SERVER.lock().unwrap().as_mut().unwrap().append_receivers(client_id, receivers);
 }
 
 pub fn close_kabletop_channel() -> Result<[u8; 32], String> {

@@ -94,6 +94,12 @@ pub mod send {
 			store.user_nfts,
 			&VARS.common.user_key.privkey
 		).map_err(|err| format!("sign_channel_tx -> {}", err))?;
+
+		// write tx to file for debug
+        // let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
+        // let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
+        // std::fs::write("open_kabletop_channel.json", json).expect("write json file");
+
 		let hash = ckb::send_transaction(tx.data())
 			.map_err(|err| format!("send_transaction -> {}", err))?;
 		if !check_transaction_committed_or_not(&hash) {
@@ -128,9 +134,9 @@ pub mod send {
 		)).map_err(|err| format!("build_tx_close_channel -> {}", err))?;
 
 		// write tx to file for debug
-        // let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
-        // let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
-        // std::fs::write("close_kabletop_channel.json", json).expect("write json file");
+        let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
+        let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
+        std::fs::write("close_kabletop_channel.json", json).expect("write json file");
 
 		let hash = ckb::send_transaction(tx.data())
 			.map_err(|err| format!("send_transaction -> {}", err))?;
@@ -354,7 +360,7 @@ pub mod reply {
 				.map_err(|err| format!("deserialize verify_game_over -> {}", err))?;
 			let mut store = cache::get_clone();
 			if value.round != store.round {
-				return Err(String::from("opposite round exceeds native round"));
+				return Err(format!("opposite round #{} exceeds native round #{}", value.round, store.round));
 			} else if value.operations != store.opponent_operations {
 				return Err(String::from("opposite and native operations are mismatched"));
 			} else if store.winner == 0 {
@@ -395,7 +401,7 @@ pub mod reply {
 				.map_err(|err| format!("deserialize switch_round -> {}", err))?;
 			let store = cache::get_clone();
 			if value.round != store.round {
-				return Err(String::from("opposite round exceeds native round"));
+				return Err(format!("opposite round #{} exceeds native round #{}", value.round, store.round));
 			} else if value.operations != store.opponent_operations {
 				return Err(String::from("opposite and native operations are mismatched"));
 			}

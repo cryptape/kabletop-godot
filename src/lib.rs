@@ -288,8 +288,10 @@ impl Kabletop {
 	fn listen_at(&self, _owner: &Node, socket: String, callback: Ref<FuncRef>) -> Variant {
 		cache::init(cache::PLAYER_TYPE::TWO);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
-		let result = server::listen(socket.as_str(), move |client_connected| {
-			if client_connected {
+		let result = server::listen(socket.as_str(), move |id, connected_receivers| {
+			if let Some(receivers) = connected_receivers {
+				server::change_client(id);
+				server::set_client_receivers(id, receivers);
 				add_hook_funcref("open_kabletop_channel", callback.clone());
 				push_event("connect_status", vec!["SERVER".to_variant(), true.to_variant()]);
 			} else {
