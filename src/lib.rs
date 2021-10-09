@@ -1,8 +1,10 @@
 use gdnative::prelude::*;
 use gdnative::api::*;
-use kabletop_godot_util::{
-	lua::highlevel::Lua, cache, ckb::*, p2p::{
-		client, server, hook, GodotType
+use kabletop_godot_sdk::{
+	lua::highlevel::Lua, cache, ckb::*, USE_GODOT, p2p::{
+		client, server, protocol::{
+			methods::reply::hook, types::GodotType
+		}
 	}
 };
 use std::{
@@ -23,7 +25,7 @@ struct Kabletop {
 impl Kabletop {
     fn new(_owner: &Node) -> Self {
 		// turn all println! to godot_print!
-		*kabletop_godot_util::USE_GODOT.lock().unwrap() = true;
+		*USE_GODOT.lock().unwrap() = true;
 		// set hooks
 		hook::add("sync_operation", |operation| {
 			let value = String::from_utf8(operation.clone()).unwrap();
@@ -178,6 +180,11 @@ impl Kabletop {
 	#[export]
 	fn set_round(&self, _owner: &Node, round: u8, actor: u8) {
 		cache::set_round_status(round, actor);
+	}
+
+	#[export]
+	fn set_nickname(&self, _owner: &Node, nickname: String) {
+		cache::set_nickname(nickname, true);
 	}
 
 	#[export]

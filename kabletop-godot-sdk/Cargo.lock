@@ -1943,25 +1943,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kabletop-godot-util"
-version = "0.1.0"
-dependencies = [
- "cc",
- "ckb-crypto",
- "ckb-jsonrpc-types",
- "ckb-types",
- "futures 0.3.16",
- "gdnative",
- "hex",
- "kabletop_sdk",
- "lazy_static",
- "molecule 0.7.2",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "kabletop_sdk"
+name = "kabletop-ckb-sdk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1979,6 +1961,24 @@ dependencies = [
  "serde_json",
  "toml",
  "websocket",
+]
+
+[[package]]
+name = "kabletop-godot-sdk"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "ckb-crypto",
+ "ckb-jsonrpc-types",
+ "ckb-types",
+ "futures 0.3.16",
+ "gdnative",
+ "hex",
+ "kabletop-ckb-sdk",
+ "lazy_static",
+ "molecule 0.7.2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

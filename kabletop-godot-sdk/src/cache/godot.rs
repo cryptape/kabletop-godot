@@ -1,7 +1,7 @@
 use std::{
 	collections::HashMap, sync::Mutex
 };
-use crate::p2p::GodotType;
+use crate::p2p::protocol::types::GodotType;
 
 lazy_static! {
 	pub static ref GODOT_CACHE: Mutex<GodotCache> = Mutex::new(GodotCache::default());

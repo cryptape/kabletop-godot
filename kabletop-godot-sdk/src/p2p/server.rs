@@ -1,8 +1,8 @@
-use kabletop_sdk::p2p::{
+use kabletop_ckb_sdk::p2p::{
 	Server, ServerClient
 };
-use crate::p2p::{
-	GodotType, protocol::{
+use crate::p2p::protocol::{
+	types::GodotType, methods::{
 		send, reply
 	}
 };

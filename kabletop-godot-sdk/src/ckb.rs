@@ -1,4 +1,4 @@
-use kabletop_sdk::ckb::{
+use kabletop_ckb_sdk::ckb::{
 	wallet::keystore, rpc::{
 		types::{
 			SearchKey, ScriptType

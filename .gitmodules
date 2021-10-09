@@ -1,3 +1,3 @@
 [submodule "lua"]
-	path = kabletop-godot-util/lua
+	path = kabletop-godot-sdk/lua
 	url = https://github.com/ashuralyk/lua

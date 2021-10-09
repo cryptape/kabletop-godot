@@ -1,6 +1,6 @@
 use ckb_crypto::secp::Signature;
 use std::sync::Mutex;
-use kabletop_sdk::{
+use kabletop_ckb_sdk::{
 	config::VARS, ckb::transaction::{
 		helper::fee as str_to_capacity, channel::{
 			protocol::Round, interact::make_round
@@ -38,8 +38,10 @@ pub struct ChannelCache {
 	pub round_owner:         u8,
 	pub user_type:           u8,
 	pub user_operations:     Vec<String>,   // operator latest round operations
+	pub user_nickname:       String,
 	pub opponent_type:       u8,
 	pub opponent_operations: Vec<String>,   // opponent latest round operations
+	pub opponent_nickname:   String,
 	pub signed_rounds:       Vec<(Round, Signature)>
 }
 
@@ -62,8 +64,10 @@ impl Default for ChannelCache {
 			round_owner:         0,
 			user_type:           0,
 			user_operations:     vec![],
+			user_nickname:       String::new(),
 			opponent_type:       0,
 			opponent_operations: vec![],
+			opponent_nickname:   String::new(),
 			signed_rounds:       vec![]
 		}
 	}
@@ -81,6 +85,15 @@ pub fn init(player_type: PLAYER_TYPE) {
 			channel.user_type = 2;
 			channel.opponent_type = 1;
 		}
+	}
+}
+
+pub fn set_nickname(nickname: String, user_or_opponent: bool) {
+	let mut channel = CHANNEL_CACHE.lock().unwrap();
+	if user_or_opponent {
+		channel.user_nickname = nickname;
+	} else {
+		channel.opponent_nickname = nickname;
 	}
 }
 

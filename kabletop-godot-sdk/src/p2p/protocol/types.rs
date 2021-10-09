@@ -23,7 +23,8 @@ pub mod request {
 	#[derive(Serialize, Deserialize)]
 	pub struct ProposeGameParameter {
 		pub staking_ckb: u64,
-		pub bet_ckb:     u64
+		pub bet_ckb:     u64,
+		pub nickname:    String
 	}
 
 	// channel organizer prepares his NFTs and public key to the partner
@@ -81,7 +82,8 @@ pub mod response {
 	// response the agreement of the game parameters
 	#[derive(Serialize, Deserialize)]
 	pub struct ApproveGameParameter {
-		pub result: bool
+		pub result:   bool,
+		pub nickname: String
 	}
 
 	// channel partner prepares his NFTs and public key, and then complete the channel tx to response the organizer

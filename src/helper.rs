@@ -1,8 +1,8 @@
 use gdnative::prelude::*;
 use gdnative::api::*;
-use kabletop_godot_util::{
+use kabletop_godot_sdk::{
 	lua::highlevel::Lua, lua, ckb::*, p2p::{
-		client, server, GodotType
+		client, server, protocol::types::GodotType
 	}
 };
 use std::{

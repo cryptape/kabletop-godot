@@ -1,4 +1,4 @@
-use kabletop_sdk::{
+use kabletop_ckb_sdk::{
 	config::VARS, p2p::Caller, ckb::{
 		rpc::methods as ckb, transaction::{
 			builder::build_tx_close_channel, channel::{
@@ -8,7 +8,7 @@ use kabletop_sdk::{
 	}
 };
 use crate::{
-	cache, p2p::protocol::{
+	cache, p2p::protocol::types::{
 		request, response, GodotType
 	}
 };
@@ -35,7 +35,6 @@ fn check_transaction_committed_or_not(hash: &H256) -> bool {
 		thread::sleep(time::Duration::from_secs(5));
 	}
 	return false;
-	// true
 }
 
 pub mod send {
@@ -46,11 +45,12 @@ pub mod send {
 		let store = cache::get_clone();
 		let value: response::ApproveGameParameter = caller.call(
 			"propose_channel_parameter", request::ProposeGameParameter {
+				nickname:    store.user_nickname,
 				staking_ckb: store.staking_ckb,
 				bet_ckb:     store.bet_ckb
 			}).map_err(|err| format!("ProposeGameParameter -> {}", err))?;
 		if !value.result {
-			return Err(String::from("opposite REFUSED proposing channel paramters"));
+			return Err(format!("opponent '{}' REFUSED proposing channel paramters", value.nickname));
 		}
 		Ok(())
 	}
@@ -260,20 +260,25 @@ pub mod reply {
 	}
 
 	// response proposal of confirmation of channel parameters
-	pub fn propose_channel_parameter(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn propose_channel_parameter(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::ProposeGameParameter = from_value(value)
 				.map_err(|err| format!("deserialize ProposeGameParameter -> {}", err))?;
 			let store = cache::get_clone();
-			trigger_hook("propose_channel_parameter", vec![]);
+			let matched = value.staking_ckb == store.staking_ckb && value.bet_ckb == store.bet_ckb;
+			if matched {
+				cache::set_nickname(value.nickname, false);
+			}
+			trigger_hook("propose_channel_parameter", vec![matched as u8]);
 			Ok(json!(response::ApproveGameParameter {
-				result: value.staking_ckb == store.staking_ckb && value.bet_ckb == store.bet_ckb
+				result:   matched,
+				nickname: store.user_nickname
 			}))
 		})
 	}
 
 	// response operation of openning kabletop channel
-	pub fn prepare_kabletop_channel(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn prepare_kabletop_channel(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::PrepareChannel = from_value(value)
 				.map_err(|err| format!("deserialize PrepareChannel -> {}", err))?;
@@ -323,7 +328,7 @@ pub mod reply {
 	}
 
 	// response operation of submitting open_kabletop_channel transaction
-	pub fn open_kabletop_channel(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn open_kabletop_channel(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::SignAndSubmitChannel = from_value(value)
 				.map_err(|err| format!("deserialize open_kabletop_channel -> {}", err))?;
@@ -337,7 +342,7 @@ pub mod reply {
 	}
 
 	// response operation of submitting close_kabletop_channel transaction
-	pub fn close_kabletop_channel(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn close_kabletop_channel(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::CloseChannel = from_value(value)
 				.map_err(|err| format!("deserialize close_kabletop_channel -> {}", err))?;
@@ -354,7 +359,7 @@ pub mod reply {
 	}
 
 	// response verification of wether game has finished 
-	pub fn notify_game_over(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn notify_game_over(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::CloseGame = from_value(value)
 				.map_err(|err| format!("deserialize verify_game_over -> {}", err))?;
@@ -395,7 +400,7 @@ pub mod reply {
 	}
 
 	// response operation of switching kabletop round
-	pub fn switch_round(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn switch_round(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::CloseRound = from_value(value)
 				.map_err(|err| format!("deserialize switch_round -> {}", err))?;
@@ -423,7 +428,7 @@ pub mod reply {
 	}
 
 	// accept operations generated from current round
-	pub fn sync_operation(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn sync_operation(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::PushOperation = from_value(value)
 				.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
@@ -440,7 +445,7 @@ pub mod reply {
 	}
 
 	// accept user-defined godot message and reply in a same type
-	pub fn sync_p2p_message(value: Value) -> BoxFuture<'static, Result<Value, String>> {
+	pub fn sync_p2p_message(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
 			let value: request::SendP2pMessage = from_value(value)
 				.map_err(|err| format!("deserialize PushP2pMessage -> {}", err))?;
