@@ -20,7 +20,6 @@ where
 	F: Fn(i32, Option<HashMap<String, Receiver<String>>>) + Send + Sync + 'static
 {
 	let server = Server::new(socket)
-		.register("propose_channel_parameter", reply::propose_channel_parameter)
 		.register("prepare_kabletop_channel", reply::prepare_kabletop_channel)
 		.register("open_kabletop_channel", reply::open_kabletop_channel)
 		.register("close_kabletop_channel", reply::close_kabletop_channel)

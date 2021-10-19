@@ -2,7 +2,7 @@ use gdnative::prelude::*;
 use gdnative::api::*;
 use kabletop_godot_sdk::{
 	lua::highlevel::Lua, lua, ckb::*, p2p::{
-		client, server, protocol::types::GodotType
+		client, server, protocol::types::GodotType, protocol_relay::types::ClientInfo
 	}
 };
 use std::{
@@ -259,6 +259,10 @@ pub fn add_hook_funcref(hook_name: &str, callback: Ref<FuncRef>) {
 	HOOKREFS.lock().unwrap().insert(String::from(hook_name), callback);
 }
 
+pub fn del_hook_funcref(hook_name: &str) {
+	HOOKREFS.lock().unwrap().remove(&String::from(hook_name));
+}
+
 pub fn call_hook_funcref(hook_name: &str, params: Vec<Variant>) -> bool {
 	let hook_name = String::from(hook_name);
 	let mut refs = HOOKREFS.lock().unwrap();
@@ -327,4 +331,29 @@ pub fn disconnect() -> Result<(), String> {
 		P2pMode::Server => Ok(server::disconnect()),
 		P2pMode::Empty  => Err(String::from("empty mode"))
 	}
+}
+
+pub fn register_client(nickname: String, staking_ckb: u64, bet_ckb: u64) -> Result<(), String> {
+	assert!(*P2PMODE.lock().unwrap() == P2pMode::Client, "register_client only available in CLIENT mode");
+	client::register_client(nickname, staking_ckb, bet_ckb)
+}
+
+pub fn unregister_client() -> Result<(), String> {
+	assert!(*P2PMODE.lock().unwrap() == P2pMode::Client, "unregister_client only available in CLIENT mode");
+	client::unregister_client()
+}
+
+pub fn fetch_clients() -> Result<Vec<ClientInfo>, String> {
+	assert!(*P2PMODE.lock().unwrap() == P2pMode::Client, "fetch_clients only available in CLIENT mode");
+	client::fetch_clients()
+}
+
+pub fn connect_client(partial_id: i32, nickname: String, staking_ckb: u64, bet_ckb: u64) -> Result<(), String> {
+	assert!(*P2PMODE.lock().unwrap() == P2pMode::Client, "connect_client only available in CLIENT mode");
+	client::connect_client(partial_id, nickname, staking_ckb, bet_ckb)
+}
+
+pub fn disconnect_client() -> Result<(), String> {
+	assert!(*P2PMODE.lock().unwrap() == P2pMode::Client, "disconnect_client only available in CLIENT mode");
+	client::disconnect_client()
 }

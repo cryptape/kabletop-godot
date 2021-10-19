@@ -40,21 +40,6 @@ fn check_transaction_committed_or_not(hash: &H256) -> bool {
 pub mod send {
 	use super::*;
 
-	// request a proposal of making consensus of channel parameters
-	pub fn propose_channel_parameter<T: Caller>(caller: &T) -> Result<(), String> {
-		let store = cache::get_clone();
-		let value: response::ApproveGameParameter = caller.call(
-			"propose_channel_parameter", request::ProposeGameParameter {
-				nickname:    store.user_nickname,
-				staking_ckb: store.staking_ckb,
-				bet_ckb:     store.bet_ckb
-			}).map_err(|err| format!("ProposeGameParameter -> {}", err))?;
-		if !value.result {
-			return Err(format!("opponent '{}' REFUSED proposing channel paramters", value.nickname));
-		}
-		Ok(())
-	}
-
 	// try to open a state channel between client and server
 	pub fn open_kabletop_channel<T: Caller>(caller: &T) -> Result<[u8; 32], String> {
 		let store = cache::get_clone();
@@ -259,24 +244,6 @@ pub mod reply {
 		});
 	}
 
-	// response proposal of confirmation of channel parameters
-	pub fn propose_channel_parameter(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
-		Box::pin(async {
-			let value: request::ProposeGameParameter = from_value(value)
-				.map_err(|err| format!("deserialize ProposeGameParameter -> {}", err))?;
-			let store = cache::get_clone();
-			let matched = value.staking_ckb == store.staking_ckb && value.bet_ckb == store.bet_ckb;
-			if matched {
-				cache::set_nickname(value.nickname, false);
-			}
-			trigger_hook("propose_channel_parameter", vec![matched as u8]);
-			Ok(json!(response::ApproveGameParameter {
-				result:   matched,
-				nickname: store.user_nickname
-			}))
-		})
-	}
-
 	// response operation of openning kabletop channel
 	pub fn prepare_kabletop_channel(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
 		Box::pin(async {
@@ -434,7 +401,7 @@ pub mod reply {
 				.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
 			let store = cache::get_clone();
 			if value.round != store.round {
-				println!("CAUTION: sync_operation => client and server round are mismatched");
+				println!("CAUTION: sync_operation => native #{} and opposite #{} round are mismatched", store.round, value.round);
 			}
 			cache::commit_opponent_operation(value.operation.clone());
 			trigger_hook("sync_operation", value.operation.as_bytes().to_vec());

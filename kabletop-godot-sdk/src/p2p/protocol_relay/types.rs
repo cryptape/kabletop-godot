@@ -2,7 +2,7 @@ use serde::{
 	Deserialize, Serialize
 };
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ClientInfo {
 	pub id:          i32,
 	pub nickname:    String,
@@ -36,6 +36,14 @@ pub mod request {
 		pub requester: ClientInfo
 	}
 
+	// request to disconnect specified linking client
+	#[derive(Serialize, Deserialize)]
+	pub struct DisconnectClient {}
+
+	// ask client the proposation of the other client's connection
+	#[derive(Serialize, Deserialize)]
+	pub struct ProposeConnection {}
+
 	// request to notify client disconnected event
 	#[derive(Serialize, Deserialize)]
 	pub struct PartnerDisconnect {
@@ -67,6 +75,16 @@ pub mod response {
 	// response the result of client connection
 	#[derive(Serialize, Deserialize)]
 	pub struct ConnectClient {
+		pub result: bool
+	}
+
+	// response the result of client disconnection
+	#[derive(Serialize, Deserialize)]
+	pub struct DisconnectClient {}
+
+	// response the result of connection confirmation
+	#[derive(Serialize, Deserialize)]
+	pub struct ProposeConnection {
 		pub result: bool
 	}
 

@@ -38,17 +38,15 @@ pub struct ChannelCache {
 	pub round_owner:         u8,
 	pub user_type:           u8,
 	pub user_operations:     Vec<String>,   // operator latest round operations
-	pub user_nickname:       String,
 	pub opponent_type:       u8,
 	pub opponent_operations: Vec<String>,   // opponent latest round operations
-	pub opponent_nickname:   String,
 	pub signed_rounds:       Vec<(Round, Signature)>
 }
 
 impl Default for ChannelCache {
 	fn default() -> Self {
 		ChannelCache {
-			staking_ckb:         str_to_capacity("500").as_u64(),
+			staking_ckb:         str_to_capacity("300").as_u64(),
 			bet_ckb:             str_to_capacity("100").as_u64(),
 			script_hash:         [0u8; 32],
 			script_args:         vec![],
@@ -64,10 +62,8 @@ impl Default for ChannelCache {
 			round_owner:         0,
 			user_type:           0,
 			user_operations:     vec![],
-			user_nickname:       String::new(),
 			opponent_type:       0,
 			opponent_operations: vec![],
-			opponent_nickname:   String::new(),
 			signed_rounds:       vec![]
 		}
 	}
@@ -88,13 +84,9 @@ pub fn init(player_type: PLAYER_TYPE) {
 	}
 }
 
-pub fn set_nickname(nickname: String, user_or_opponent: bool) {
+pub fn clear() {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	if user_or_opponent {
-		channel.user_nickname = nickname;
-	} else {
-		channel.opponent_nickname = nickname;
-	}
+	*channel = ChannelCache::default();
 }
 
 pub fn set_round_status(count: u8, owner: u8) {

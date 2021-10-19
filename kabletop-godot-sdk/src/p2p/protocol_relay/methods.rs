@@ -60,6 +60,14 @@ pub mod send {
 		}
 		Ok(())
 	}
+
+	// disconnect from one linking client
+	pub fn disconnect_client(caller: &ClientSender) -> Result<(), String> {
+		let _: response::DisconnectClient = caller.call(
+			"disconnect_client", request::DisconnectClient {}
+		).map_err(|err| format!("DisconnectClient -> {}", err))?;
+		Ok(())
+	}
 }
 
 pub mod reply {
@@ -91,6 +99,18 @@ pub mod reply {
 				}
 			}
 		});
+	}
+
+	// handle messsage of proposation of client connection
+	pub fn propose_connection(_: i32, value: Value) -> BoxFuture<'static, Result<Value, String>> {
+		Box::pin(async {
+			let _: request::ProposeConnection = from_value(value)
+				.map_err(|err| format!("deserialize ProposeConnection -> {}", err))?;
+			trigger_hook("propose_connection", vec![]);
+			Ok(json!(response::ProposeConnection {
+				result: true
+			}))
+		})
 	}
 
 	// handle message of partner client disconnected

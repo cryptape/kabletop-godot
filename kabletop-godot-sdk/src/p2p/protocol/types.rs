@@ -19,14 +19,6 @@ pub enum GodotType {
 pub mod request {
 	use super::*;
 
-	// reach a consensus of staking_ckb and bet_ckb
-	#[derive(Serialize, Deserialize)]
-	pub struct ProposeGameParameter {
-		pub staking_ckb: u64,
-		pub bet_ckb:     u64,
-		pub nickname:    String
-	}
-
 	// channel organizer prepares his NFTs and public key to the partner
 	#[derive(Serialize, Deserialize)]
 	pub struct PrepareChannel {
@@ -78,13 +70,6 @@ pub mod request {
 // response messages
 pub mod response {
 	use super::*;
-
-	// response the agreement of the game parameters
-	#[derive(Serialize, Deserialize)]
-	pub struct ApproveGameParameter {
-		pub result:   bool,
-		pub nickname: String
-	}
 
 	// channel partner prepares his NFTs and public key, and then complete the channel tx to response the organizer
 	#[derive(Serialize, Deserialize)]

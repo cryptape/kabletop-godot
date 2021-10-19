@@ -2,7 +2,7 @@ use gdnative::prelude::*;
 use gdnative::api::*;
 use kabletop_godot_sdk::{
 	lua::highlevel::Lua, cache, ckb::*, USE_GODOT, p2p::{
-		client, server, protocol::{
+		client, server, protocol_relay::methods::reply::hook as relay_hook, protocol::{
 			methods::reply::hook, types::GodotType
 		}
 	}
@@ -50,6 +50,12 @@ impl Kabletop {
 			set_lua(lua);
 			randomseed(hash);
 			call_hook_funcref("open_kabletop_channel", vec![true.to_variant(), hex::encode(hash).to_variant()]);
+		});
+		relay_hook::add("propose_connection", |_| {
+			push_event("connect_status", vec!["PARTNER".to_variant(), true.to_variant()]);
+		});
+		relay_hook::add("partner_disconnect", |_| {
+			push_event("connect_status", vec!["PARTNER".to_variant(), false.to_variant()]);
 		});
 		// instance kabletop godot object
         Kabletop {
@@ -183,11 +189,6 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn set_nickname(&self, _owner: &Node, nickname: String) {
-		cache::set_nickname(nickname, true);
-	}
-
-	#[export]
 	fn get_nfts(&self, _owner: &Node) -> Dictionary {
 		into_dictionary(&self.nfts)
 	}
@@ -292,8 +293,12 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn listen_at(&self, _owner: &Node, socket: String, callback: Ref<FuncRef>) -> Variant {
+	fn listen_at(&self, _owner: &Node, socket: String, staking_ckb: u64, bet_ckb: u64, callback: Ref<FuncRef>) -> Variant {
+		if self.nfts.len() == 0 {
+			return "empty nfts".to_variant();
+		}
 		cache::init(cache::PLAYER_TYPE::TWO);
+		cache::set_staking_and_bet_ckb(staking_ckb, bet_ckb);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
 		let result = server::listen(socket.as_str(), move |id, connected_receivers| {
 			if let Some(receivers) = connected_receivers {
@@ -319,7 +324,7 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn create_channel(&self, _owner: &Node, callback: Ref<FuncRef>) -> Variant {
+	fn create_channel(&self, _owner: &Node, staking_ckb: u64, bet_ckb: u64, callback: Ref<FuncRef>) -> Variant {
 		if self.nfts.len() == 0 {
 			return "empty nfts".to_variant();
 		}
@@ -327,6 +332,7 @@ impl Kabletop {
 			return "no client mode".to_variant();
 		}
 		cache::init(cache::PLAYER_TYPE::ONE);
+		cache::set_staking_and_bet_ckb(staking_ckb, bet_ckb);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
 		thread::spawn(move || match client::open_kabletop_channel() {
 			Ok(hash) => {
@@ -360,7 +366,6 @@ impl Kabletop {
 	fn close_channel(&self, _owner: &Node, callback: Ref<FuncRef>) {
 		thread::spawn(move || match close_kabletop_channel() {
 			Ok(hash) => {
-				disconnect().unwrap();
 				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
 			},
 			Err(err) => {
@@ -416,6 +421,7 @@ impl Kabletop {
 
 	#[export]
 	fn reply_p2p_message(&self, _owner: &Node, message: String, callback: Ref<FuncRef>) {
+		let name = message.clone();
 		cache::set_godot_callback(message.as_str(), Box::new(move |parameters: HashMap<String, GodotType>| {
 			unsafe {
 				let values = Dictionary::new();
@@ -434,7 +440,9 @@ impl Kabletop {
 				let result = callback
 					.assume_safe()
 					.call_func(&[values.into_shared().to_variant()]);
-				assert!(result.get_type() == VariantType::Dictionary);
+				if result.get_type() != VariantType::Dictionary {
+					panic!("variant {:?} isn't dictionary in p2p_message {}", result, name);
+				}
 				let mut values = HashMap::new();
 				result
 					.to_dictionary()
@@ -470,7 +478,7 @@ impl Kabletop {
 					};
 					values.insert(name.to_godot_string().to_string(), value);
 				});
-			let (message, parameters) = sync_p2p_message(message, values).unwrap();
+			let (message, parameters) = sync_p2p_message(message.clone(), values).expect(format!("sync {}", message).as_str());
 			let values = Dictionary::new(); 
 			parameters
 				.iter()
@@ -485,6 +493,72 @@ impl Kabletop {
 					values.insert(name, value);
 				});
 			push_event("p2p_message_reply", vec![message.to_variant(), values.into_shared().to_variant()]);
+		});
+	}
+
+	#[export]
+	fn register_relay(
+		&self, _owner: &Node, nickname: String, staking_ckb: u64, bet_ckb: u64, callback: Ref<FuncRef>
+	) -> Variant {
+		if self.nfts.len() == 0 {
+			return "empty nfts".to_variant();
+		}
+		if let Err(error) = register_client(nickname, staking_ckb, bet_ckb) {
+			error.to_variant()
+		} else {
+			cache::init(cache::PLAYER_TYPE::TWO);
+			cache::set_staking_and_bet_ckb(staking_ckb, bet_ckb);
+			cache::set_playing_nfts(into_nfts(self.nfts.clone()));
+			add_hook_funcref("open_kabletop_channel", callback);
+			Variant::default()
+		}
+	}
+
+	#[export]
+	fn unregister_relay(&self, _owner: &Node) -> Variant {
+		if let Err(error) = unregister_client() {
+			error.to_variant()
+		} else {
+			cache::clear();
+			del_hook_funcref("open_kabletop_channel");
+			Variant::default()
+		}
+	}
+
+	#[export]
+	fn connect_client_via_relay(&self, _: &Node, client_id: i32, nickname: String, staking_ckb: u64, bet_ckb: u64) -> Variant {
+		if let Err(error) = connect_client(client_id, nickname, staking_ckb, bet_ckb) {
+			error.to_variant()
+		} else {
+			Variant::default()
+		}
+	}
+
+	#[export]
+	fn disconnect_client_via_replay(&self, _owner: &Node) -> Variant {
+		if let Err(error) = disconnect_client() {
+			error.to_variant()
+		} else {
+			Variant::default()
+		}
+	}
+
+	#[export]
+	fn fetch_clients_from_relay(&self, _owner: &Node, callback: Ref<FuncRef>) {
+		thread::spawn(move || match fetch_clients() {
+			Err(error)  => FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()])),
+			Ok(clients) => {
+				let array = VariantArray::new();
+				for client in clients {
+					let value = Dictionary::new();
+					value.insert("id",          client.id);
+					value.insert("nickname",    client.nickname);
+					value.insert("staking_ckb", client.staking_ckb);
+					value.insert("bet_ckb",     client.bet_ckb);
+					array.push(value.into_shared());
+				}
+				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), array.into_shared().to_variant()]))
+			}
 		});
 	}
 }
