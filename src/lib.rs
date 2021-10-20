@@ -49,7 +49,10 @@ impl Kabletop {
 			lua.boost(get_lua_entry());
 			set_lua(lua);
 			randomseed(hash);
-			call_hook_funcref("open_kabletop_channel", vec![true.to_variant(), hex::encode(hash).to_variant()]);
+			push_event("channel_status", vec![true.to_variant(), hex::encode(hash).to_variant()]);
+		});
+		hook::add("close_kabletop_channel", |hash| {
+			push_event("channel_status", vec![false.to_variant(), hex::encode(hash).to_variant()]);
 		});
 		relay_hook::add("propose_connection", |_| {
 			push_event("connect_status", vec!["PARTNER".to_variant(), true.to_variant()]);
@@ -77,6 +80,23 @@ impl Kabletop {
 					name: "status",
 					default: Variant::default(),
 					export_info: ExportInfo::new(VariantType::Bool),
+					usage: PropertyUsage::DEFAULT
+				}
+            ]
+        });
+        builder.add_signal(Signal {
+            name: "channel_status",
+            args: &[
+				SignalArgument {
+					name: "status",
+					default: Variant::default(),
+					export_info: ExportInfo::new(VariantType::Bool),
+					usage: PropertyUsage::DEFAULT
+				},
+				SignalArgument {
+					name: "hash",
+					default: Variant::default(),
+					export_info: ExportInfo::new(VariantType::GodotString),
 					usage: PropertyUsage::DEFAULT
 				}
             ]
@@ -293,7 +313,7 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn listen_at(&self, _owner: &Node, socket: String, staking_ckb: u64, bet_ckb: u64, callback: Ref<FuncRef>) -> Variant {
+	fn listen_at(&self, _owner: &Node, socket: String, staking_ckb: u64, bet_ckb: u64) -> Variant {
 		if self.nfts.len() == 0 {
 			return "empty nfts".to_variant();
 		}
@@ -304,7 +324,6 @@ impl Kabletop {
 			if let Some(receivers) = connected_receivers {
 				server::change_client(id);
 				server::set_client_receivers(id, receivers);
-				add_hook_funcref("open_kabletop_channel", callback.clone());
 				push_event("connect_status", vec!["SERVER".to_variant(), true.to_variant()]);
 			} else {
 				unset_lua();
@@ -497,9 +516,7 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn register_relay(
-		&self, _owner: &Node, nickname: String, staking_ckb: u64, bet_ckb: u64, callback: Ref<FuncRef>
-	) -> Variant {
+	fn register_relay(&self, _owner: &Node, nickname: String, staking_ckb: u64, bet_ckb: u64) -> Variant {
 		if self.nfts.len() == 0 {
 			return "empty nfts".to_variant();
 		}
@@ -509,7 +526,6 @@ impl Kabletop {
 			cache::init(cache::PLAYER_TYPE::TWO);
 			cache::set_staking_and_bet_ckb(staking_ckb, bet_ckb);
 			cache::set_playing_nfts(into_nfts(self.nfts.clone()));
-			add_hook_funcref("open_kabletop_channel", callback);
 			Variant::default()
 		}
 	}
@@ -520,7 +536,6 @@ impl Kabletop {
 			error.to_variant()
 		} else {
 			cache::clear();
-			del_hook_funcref("open_kabletop_channel");
 			Variant::default()
 		}
 	}

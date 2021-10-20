@@ -33,38 +33,36 @@ pub struct ChannelCache {
 	pub opponent_pkhash: [u8; 20],
 
 	// for kabletop round
-	pub winner:              u8,
-	pub round:               u8,
-	pub round_owner:         u8,
-	pub user_type:           u8,
-	pub user_operations:     Vec<String>,   // operator latest round operations
-	pub opponent_type:       u8,
-	pub opponent_operations: Vec<String>,   // opponent latest round operations
-	pub signed_rounds:       Vec<(Round, Signature)>
+	pub winner:           u8,
+	pub round:            u8,
+	pub round_owner:      u8,
+	pub user_type:        u8,
+	pub opponent_type:    u8,
+	pub round_operations: Vec<String>,
+	pub signed_rounds:    Vec<(Round, Signature)>
 }
 
 impl Default for ChannelCache {
 	fn default() -> Self {
 		ChannelCache {
-			staking_ckb:         str_to_capacity("300").as_u64(),
-			bet_ckb:             str_to_capacity("100").as_u64(),
-			script_hash:         [0u8; 32],
-			script_args:         vec![],
-			channel_hash:        [0u8; 32],
-			capacity:            0,
-			max_nfts_count:      40,
-			user_nfts:           vec![],
-			opponent_nfts:       vec![],
-			user_pkhash:         VARS.common.user_key.pubhash.clone(),
-			opponent_pkhash:     [0u8; 20],
-			winner:              0,
-			round:               0,
-			round_owner:         0,
-			user_type:           0,
-			user_operations:     vec![],
-			opponent_type:       0,
-			opponent_operations: vec![],
-			signed_rounds:       vec![]
+			staking_ckb:      str_to_capacity("300").as_u64(),
+			bet_ckb:          str_to_capacity("100").as_u64(),
+			script_hash:      [0u8; 32],
+			script_args:      vec![],
+			channel_hash:     [0u8; 32],
+			capacity:         0,
+			max_nfts_count:   40,
+			user_nfts:        vec![],
+			opponent_nfts:    vec![],
+			user_pkhash:      VARS.common.user_key.pubhash.clone(),
+			opponent_pkhash:  [0u8; 20],
+			winner:           0,
+			round:            0,
+			round_owner:      0,
+			user_type:        0,
+			opponent_type:    0,
+			round_operations: vec![],
+			signed_rounds:    vec![]
 		}
 	}
 }
@@ -131,26 +129,26 @@ pub fn set_opponent_pkhash(pkhash: [u8; 20]) {
 
 pub fn commit_user_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	let round = make_round(channel.user_type, channel.user_operations.clone());
+	let round = make_round(channel.user_type, channel.round_operations.clone());
 	channel.signed_rounds.push((round, signature));
-	channel.user_operations = vec![];
+	channel.round_operations = vec![];
 }
 
 pub fn commit_opponent_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	let round = make_round(channel.opponent_type, channel.opponent_operations.clone());
+	let round = make_round(channel.opponent_type, channel.round_operations.clone());
 	channel.signed_rounds.push((round, signature));
-	channel.opponent_operations = vec![];
+	channel.round_operations = vec![];
 }
 
 pub fn commit_user_operation(operation: String) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	channel.user_operations.push(operation);
+	channel.round_operations.push(operation);
 }
 
 pub fn commit_opponent_operation(operation: String) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	channel.opponent_operations.push(operation);
+	channel.round_operations.push(operation);
 }
 
 pub fn get_clone() -> ChannelCache {

@@ -110,6 +110,20 @@ pub mod send {
 	// try to close a state channel between client and server
 	pub fn close_kabletop_channel<T: Caller>(caller: &T) -> Result<[u8; 32], String> {
 		let store = cache::get_clone();
+
+		// print all operations in each round for debug
+		// println!("test close_kabletop_channel");
+		// cache::get_clone().signed_rounds.iter().enumerate().for_each(|(i, (round, _))| {
+		// 	println!("round {}", i + 1);
+		// 	for i in 0..round.operations().len() {
+		// 		let operation = match round.operations().get(i) {
+		// 			Some(operation) => String::from_utf8(operation.raw_data().to_vec()).unwrap(),
+		// 			None => panic!("bad operaion {}", i)
+		// 		};
+		// 		println!("{}", operation);
+		// 	}
+		// });
+
 		let tx = block_on(build_tx_close_channel(
 			store.script_args,
 			store.channel_hash.clone(),
@@ -145,7 +159,7 @@ pub mod send {
 		let value: response::CloseGame = caller.call(
 			"notify_game_over", request::CloseGame {
 				round:      store.round,
-				operations: store.user_operations.clone()
+				operations: store.round_operations.clone()
 			}).map_err(|err| format!("CloseGame -> {}", err))?;
 		if !value.result {
 			return Err(String::from("opposite verified the finish state of game FAILED"));
@@ -153,7 +167,7 @@ pub mod send {
 		let signature = Signature::from_slice(value.signature.as_bytes())
 			.map_err(|err| format!("into_signature -> {}", err))?;
 		let mut signed_rounds = store.signed_rounds;
-		signed_rounds.push((channel::make_round(store.user_type, store.user_operations), signature.clone()));
+		signed_rounds.push((channel::make_round(store.user_type, store.round_operations), signature.clone()));
 		match channel::check_channel_round(store.script_hash.into(), store.capacity, signed_rounds, store.opponent_pkhash) {
 			Ok(true)  => cache::commit_user_round(signature.clone()),
 			Ok(false) => return Err(format!("signature not match pkhash {}", hex::encode(store.opponent_pkhash))),
@@ -168,7 +182,7 @@ pub mod send {
 		let value: response::OpenRound = caller.call(
 			"switch_round", request::CloseRound {
 				round:      store.round,
-				operations: store.user_operations.clone()
+				operations: store.round_operations.clone()
 			}).map_err(|err| format!("CloseRound -> {}", err))?;
 		if value.round != store.round {
 			return Err(format!("opposite round count({}) mismatched native round count({})", value.round, store.round));
@@ -176,7 +190,7 @@ pub mod send {
 		let signature = Signature::from_slice(value.signature.as_bytes())
 			.map_err(|err| format!("into_signature -> {}", err))?;
 		let mut signed_rounds = store.signed_rounds;
-		signed_rounds.push((channel::make_round(store.user_type, store.user_operations), signature.clone()));
+		signed_rounds.push((channel::make_round(store.user_type, store.round_operations), signature.clone()));
 		match channel::check_channel_round(store.script_hash.into(), store.capacity, signed_rounds, store.opponent_pkhash) {
 			Ok(true)  => cache::commit_user_round(signature.clone()),
 			Ok(false) => return Err(format!("signature not match pkhash {}", hex::encode(store.opponent_pkhash))),
@@ -333,7 +347,7 @@ pub mod reply {
 			let mut store = cache::get_clone();
 			if value.round != store.round {
 				return Err(format!("opposite round #{} exceeds native round #{}", value.round, store.round));
-			} else if value.operations != store.opponent_operations {
+			} else if value.operations != store.round_operations {
 				return Err(String::from("opposite and native operations are mismatched"));
 			} else if store.winner == 0 {
 				let mut ok = false;
@@ -349,7 +363,7 @@ pub mod reply {
 					return Err(String::from("native winner hasn't been set"));
 				}
 			}
-			let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
+			let next_round = channel::make_round(store.opponent_type, store.round_operations);
 			let signature = channel::sign_channel_round(
 				store.script_hash.pack(),
 				store.capacity,
@@ -374,10 +388,10 @@ pub mod reply {
 			let store = cache::get_clone();
 			if value.round != store.round {
 				return Err(format!("opposite round #{} exceeds native round #{}", value.round, store.round));
-			} else if value.operations != store.opponent_operations {
+			} else if value.operations != store.round_operations {
 				return Err(String::from("opposite and native operations are mismatched"));
 			}
-			let next_round = channel::make_round(store.opponent_type, store.opponent_operations);
+			let next_round = channel::make_round(store.opponent_type, store.round_operations);
 			let signature = channel::sign_channel_round(
 				store.script_hash.pack(),
 				store.capacity,

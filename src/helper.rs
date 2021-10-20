@@ -23,7 +23,7 @@ lazy_static::lazy_static! {
 	pub static ref NFTS:     Mutex<Option<Variant>>                   = Mutex::new(None);
 	pub static ref STATUS:   Mutex<Option<(u8, bool)>>                = Mutex::new(None);
 	pub static ref P2PMODE:  Mutex<P2pMode>                           = Mutex::new(P2pMode::Empty);
-	pub static ref HOOKREFS: Mutex<HashMap<String, Ref<FuncRef>>>     = Mutex::new(HashMap::new());
+	// pub static ref HOOKREFS: Mutex<HashMap<String, Ref<FuncRef>>>     = Mutex::new(HashMap::new());
 	pub static ref DELAIES:  Mutex<HashMap<String, Vec<(f32, Box<dyn Fn() + 'static + Send + Sync>)>>> = Mutex::new(HashMap::new());
 }
 
@@ -255,25 +255,25 @@ pub fn init_panic_hook() {
     }));
 }
 
-pub fn add_hook_funcref(hook_name: &str, callback: Ref<FuncRef>) {
-	HOOKREFS.lock().unwrap().insert(String::from(hook_name), callback);
-}
+// pub fn add_hook_funcref(hook_name: &str, callback: Ref<FuncRef>) {
+// 	HOOKREFS.lock().unwrap().insert(String::from(hook_name), callback);
+// }
 
-pub fn del_hook_funcref(hook_name: &str) {
-	HOOKREFS.lock().unwrap().remove(&String::from(hook_name));
-}
+// pub fn del_hook_funcref(hook_name: &str) {
+// 	HOOKREFS.lock().unwrap().remove(&String::from(hook_name));
+// }
 
-pub fn call_hook_funcref(hook_name: &str, params: Vec<Variant>) -> bool {
-	let hook_name = String::from(hook_name);
-	let mut refs = HOOKREFS.lock().unwrap();
-	if let Some(callback) = refs.get(&hook_name) {
-		unsafe { callback.assume_safe().call_func(params.as_slice()); }
-		refs.remove(&hook_name);
-		true
-	} else {
-		false
-	}
-}
+// pub fn call_hook_funcref(hook_name: &str, params: Vec<Variant>) -> bool {
+// 	let hook_name = String::from(hook_name);
+// 	let mut refs = HOOKREFS.lock().unwrap();
+// 	if let Some(callback) = refs.get(&hook_name) {
+// 		unsafe { callback.assume_safe().call_func(params.as_slice()); }
+// 		refs.remove(&hook_name);
+// 		true
+// 	} else {
+// 		false
+// 	}
+// }
 
 pub fn set_mode(mode: P2pMode) {
 	*P2PMODE.lock().unwrap() = mode;
