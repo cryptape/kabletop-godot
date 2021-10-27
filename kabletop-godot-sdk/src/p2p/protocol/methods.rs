@@ -126,7 +126,6 @@ pub mod send {
 
 		let tx = block_on(build_tx_close_channel(
 			store.script_args,
-			store.channel_hash.clone(),
 			store.signed_rounds,
 			store.winner,
 			false

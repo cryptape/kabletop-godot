@@ -1,13 +1,14 @@
 use gdnative::prelude::*;
 use gdnative::api::*;
 use kabletop_godot_sdk::{
-	lua::highlevel::Lua, lua, ckb::*, p2p::{
+	lua::highlevel::Lua, cache, lua, ckb::*, p2p::{
 		client, server, protocol::types::GodotType, protocol_relay::types::ClientInfo
 	}
 };
 use std::{
 	sync::Mutex, thread, convert::TryInto, collections::HashMap
 };
+use molecule::prelude::Entity;
 
 #[derive(PartialEq, Copy, Clone)]
 pub enum P2pMode {
@@ -23,7 +24,6 @@ lazy_static::lazy_static! {
 	pub static ref NFTS:     Mutex<Option<Variant>>                   = Mutex::new(None);
 	pub static ref STATUS:   Mutex<Option<(u8, bool)>>                = Mutex::new(None);
 	pub static ref P2PMODE:  Mutex<P2pMode>                           = Mutex::new(P2pMode::Empty);
-	// pub static ref HOOKREFS: Mutex<HashMap<String, Ref<FuncRef>>>     = Mutex::new(HashMap::new());
 	pub static ref DELAIES:  Mutex<HashMap<String, Vec<(f32, Box<dyn Fn() + 'static + Send + Sync>)>>> = Mutex::new(HashMap::new());
 }
 
@@ -171,6 +171,34 @@ pub fn process_delay_funcs(delta_sec: f32) {
 	}
 }
 
+pub fn persist_signed_rounds() {
+	let clone = cache::get_clone();
+	let filename = format!("db/{}.json", hex::encode(clone.channel_hash));
+	let content = clone.signed_rounds
+		.into_iter()
+		.map(|(round, signature)| format!("{}|{}", hex::encode(signature.serialize()), hex::encode(round.as_slice())))
+		.collect::<Vec<_>>()
+		.join("\n");
+	std::fs::write(filename, content).expect("persist rounds");
+}
+
+pub fn recover_signed_rounds(content: String) -> Result<Vec<(Vec<u8>, Vec<u8>)>, String> {
+	content
+		.split("\n")
+		.map(|encode| {
+			let values = String::from(encode).split("|").map(|v| v.into()).collect::<Vec<String>>();
+			if values.len() == 2 {
+				if let Ok(round) = hex::decode(values[0].as_str()) {
+					if let Ok(signature) = hex::decode(values[1].as_str()) {
+						return Ok((round, signature))
+					}
+				}
+			}
+			Err(String::from("broken persisted kabletop file"))
+		})
+		.collect::<Result<Vec<_>, String>>()
+}
+
 pub fn push_event(name: &str, value: Vec<Variant>) {
 	EVENTS
 		.lock()
@@ -254,26 +282,6 @@ pub fn init_panic_hook() {
         }
     }));
 }
-
-// pub fn add_hook_funcref(hook_name: &str, callback: Ref<FuncRef>) {
-// 	HOOKREFS.lock().unwrap().insert(String::from(hook_name), callback);
-// }
-
-// pub fn del_hook_funcref(hook_name: &str) {
-// 	HOOKREFS.lock().unwrap().remove(&String::from(hook_name));
-// }
-
-// pub fn call_hook_funcref(hook_name: &str, params: Vec<Variant>) -> bool {
-// 	let hook_name = String::from(hook_name);
-// 	let mut refs = HOOKREFS.lock().unwrap();
-// 	if let Some(callback) = refs.get(&hook_name) {
-// 		unsafe { callback.assume_safe().call_func(params.as_slice()); }
-// 		refs.remove(&hook_name);
-// 		true
-// 	} else {
-// 		false
-// 	}
-// }
 
 pub fn set_mode(mode: P2pMode) {
 	*P2PMODE.lock().unwrap() = mode;

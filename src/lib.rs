@@ -33,6 +33,7 @@ impl Kabletop {
 		});
 		hook::add("switch_round", |signature| {
 			randomseed(signature);
+			persist_signed_rounds();
 		});
 		hook::add("open_kabletop_channel", |hash| {
 			let store = cache::get_clone();
@@ -50,6 +51,7 @@ impl Kabletop {
 			set_lua(lua);
 			randomseed(hash);
 			push_event("channel_status", vec![true.to_variant(), hex::encode(hash).to_variant()]);
+			persist_signed_rounds();
 		});
 		hook::add("close_kabletop_channel", |hash| {
 			push_event("channel_status", vec![false.to_variant(), hex::encode(hash).to_variant()]);
@@ -373,6 +375,7 @@ impl Kabletop {
 				// set first randomseed and callback to gdscript
 				randomseed(&hash);
 				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
+				persist_signed_rounds();
 			},
 			Err(err) => {
 				FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), err.to_variant()]));
@@ -391,6 +394,26 @@ impl Kabletop {
 				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_variant()]));
 			}
 		});
+	}
+
+	#[export]
+	fn challenge_channel(
+		&self, _: &Node, lock_args: String, challenger: u8, hash: String, operations: Vec<String>, callback: Ref<FuncRef>
+	) {
+		let filename = format!("db/{}.json", hash);
+		match std::fs::read_to_string(filename) {
+			Ok(content) => match recover_signed_rounds(content) {
+				Ok(rounds) => {
+					challenge_kabletop_channel(lock_args, challenger, operations, rounds, handle_transaction(||{}, callback));
+				},
+				Err(err) => {
+					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_string().to_variant()]));
+				}
+			},
+			Err(err) => {
+				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_string().to_variant()]));
+			}
+		}
 	}
 
 	#[export]
@@ -422,6 +445,7 @@ impl Kabletop {
 					Ok(signature) => {
 						randomseed(&signature);
 						FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), Variant::default()]));
+						persist_signed_rounds();
 					},
 					Err(error) => {
 						FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));

@@ -6,7 +6,7 @@ use kabletop_ckb_sdk::ckb::{
 			send_transaction, get_transaction, get_live_nfts, get_live_cells
 		}
 	}, transaction::{
-		builder::*, helper::{
+		builder::*, channel::protocol::Round, helper::{
 			sighash_script, wallet_script, nft_script, payment_script, blake160_to_byte20
 		}
 	}
@@ -18,6 +18,8 @@ use ckb_types::{
 use std::{
 	thread, time::Duration, collections::HashMap
 };
+use ckb_crypto::secp::Signature;
+use molecule::prelude::Entity;
 pub use ckb_types::H256;
 
 // get user owned nfts by their lock_script (from user_pkhash) and type_script (from composer_pkhash)
@@ -211,4 +213,43 @@ where
 			Err(err) => f(Err(err.to_string()))
 		}
 	});
+}
+
+// challenge specified kabletop channel on-chain
+pub fn challenge_kabletop_channel<F>(
+	channel_args: String, challenger: u8, pending_operations: Vec<String>, rounds: Vec<(Vec<u8>, Vec<u8>)>, f: F
+) where
+	F: Fn(Result<H256, String>) + Send + 'static
+{
+	let rounds = rounds
+		.iter()
+		.map(|(round, signature)| {
+			if let Ok(round) = Round::from_slice(round.as_slice()) {
+				if let Ok(signature) = Signature::from_slice(signature) {
+					return Ok((round, signature))
+				}
+			}
+			Err(String::from("bad rounds and signature bytes"))
+		})
+		.collect::<Result<Vec<_>, String>>();
+	if let Err(err) = rounds {
+		f(Err(err));
+		return
+	}
+	match hex::decode(channel_args) {
+		Ok(args) => {
+			thread::spawn(move || {
+				match block_on(build_tx_challenge_channel(args, challenger, pending_operations.into(), rounds.unwrap())) {
+					Ok(tx) => {
+						match push_transaction(tx) {
+							Ok(hash) => f(Ok(hash)),
+							Err(err) => f(Err(err.to_string()))
+						}
+					},
+					Err(err) => f(Err(err.to_string()))
+				}
+			});
+		},
+		Err(err) => f(Err(err.to_string()))
+	};
 }
