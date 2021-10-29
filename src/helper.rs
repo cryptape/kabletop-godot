@@ -5,9 +5,18 @@ use kabletop_godot_sdk::{
 		client, server, protocol::types::GodotType, protocol_relay::types::ClientInfo
 	}
 };
+use kabletop_ckb_sdk::{
+	config::VARS, ckb::transaction::{
+		helper::privkey_to_pkhash, channel::protocol::{
+			Args, Round
+		}
+	}
+};
 use std::{
 	sync::Mutex, thread, convert::TryInto, collections::HashMap
 };
+use futures::executor::block_on;
+use ckb_crypto::secp::Signature;
 use molecule::prelude::Entity;
 
 #[derive(PartialEq, Copy, Clone)]
@@ -173,30 +182,114 @@ pub fn process_delay_funcs(delta_sec: f32) {
 
 pub fn persist_signed_rounds() {
 	let clone = cache::get_clone();
-	let filename = format!("db/{}.json", hex::encode(clone.channel_hash));
-	let content = clone.signed_rounds
+	let filename = format!("db/{}.json", hex::encode(clone.script_hash));
+	let content = hex::encode(clone.script_args) + "\n" + clone.signed_rounds
 		.into_iter()
 		.map(|(round, signature)| format!("{}|{}", hex::encode(signature.serialize()), hex::encode(round.as_slice())))
 		.collect::<Vec<_>>()
-		.join("\n");
+		.join("\n")
+		.as_str();
 	std::fs::write(filename, content).expect("persist rounds");
 }
 
-pub fn recover_signed_rounds(content: String) -> Result<Vec<(Vec<u8>, Vec<u8>)>, String> {
-	content
-		.split("\n")
-		.map(|encode| {
-			let values = String::from(encode).split("|").map(|v| v.into()).collect::<Vec<String>>();
-			if values.len() == 2 {
-				if let Ok(round) = hex::decode(values[0].as_str()) {
-					if let Ok(signature) = hex::decode(values[1].as_str()) {
-						return Ok((round, signature))
+pub fn remove_signed_rounds(hexed_script_hash: String) -> bool {
+	let filename = format!("db/{}.json", hexed_script_hash);
+	if let Ok(_) = std::fs::remove_file(filename) {
+		true
+	} else {
+		println!("file {} not found", hexed_script_hash);
+		false
+	}
+}
+
+pub fn recover_signed_rounds(hexed_script_hash: String) -> Result<(Vec<u8>, Vec<(Round, Signature)>), String> {
+	let filename = format!("db/{}.json", hexed_script_hash);
+	match std::fs::read_to_string(filename.clone()) {
+		Ok(content) => {
+			let mut lock_args = None;
+			let mut signed_rounds = vec![];
+			content
+				.split("\n")
+				.for_each(|encode| {
+					let values = String::from(encode).split("|").map(|v| v.into()).collect::<Vec<String>>();
+					match values.len() {
+						1 => {
+							if lock_args.is_none() {
+								if let Ok(script_args) = hex::decode(values[0].as_str()) {
+									lock_args = Some(script_args);
+								}
+							}
+						},
+						2 => {
+							if signed_rounds.is_empty() {
+								if let Ok(round) = hex::decode(values[0].as_str()) {
+									if let Ok(signature) = hex::decode(values[1].as_str()) {
+										if let Ok(round) = Round::from_slice(round.as_slice()) {
+											if let Ok(signature) = Signature::from_slice(signature.as_slice()) {
+												signed_rounds.push((round, signature));
+											}
+										}
+									}
+								}
+							}
+						},
+						_ => {},
 					}
-				}
+				});
+			if lock_args.is_none() || signed_rounds.is_empty() {
+				Err(format!("persisted kabletop log {} format error", filename))
+			} else {
+				Ok((lock_args.unwrap(), signed_rounds))
 			}
-			Err(String::from("broken persisted kabletop file"))
-		})
-		.collect::<Result<Vec<_>, String>>()
+		},
+		Err(err) => Err(err.to_string())
+	}
+}
+
+pub fn scan_uncomplete_signed_rounds() -> Result<Vec<Dictionary>, String> {
+	let db = std::fs::read_dir("db").map_err(|err| err.to_string())?;
+	let mut values = vec![];
+	for path in db {
+		let path = path.map_err(|err| err.to_string())?.path();
+		let (lock_args, _) = recover_signed_rounds(String::from(path.to_str().unwrap()))?;
+		let args = Args::from_slice(lock_args.as_slice()).map_err(|err| err.to_string())?;
+		let user1_pkhash: [u8; 20] = args.user1_pkhash().into();
+		let user2_pkhash: [u8; 20] = args.user2_pkhash().into();
+		let owner_pkhash = privkey_to_pkhash(&VARS.common.user_key.privkey);
+		let challenge = Dictionary::new();
+		if owner_pkhash[..] == user1_pkhash[..] {
+			challenge.insert("owner_pkhash", hex::encode(user1_pkhash));
+			challenge.insert("other_pkhash", hex::encode(user2_pkhash));
+			challenge.insert("owner_nfts_count", args.user1_nfts().len());
+			challenge.insert("other_nfts_count", args.user2_nfts().len());
+		} else if owner_pkhash[..] == user2_pkhash[..] {
+			challenge.insert("owner_pkhash", hex::encode(user2_pkhash));
+			challenge.insert("other_pkhash", hex::encode(user1_pkhash));
+			challenge.insert("owner_nfts_count", args.user2_nfts().len());
+			challenge.insert("other_nfts_count", args.user1_nfts().len());
+		} else {
+			continue
+		}
+		let staking_ckb: u64 = args.user_staking_ckb().into();
+		let blocknumber: u64 = args.begin_blocknumber().into();
+		challenge.insert("staking_ckb", staking_ckb);
+		challenge.insert("begin_blocknumber", blocknumber);
+		values.push((challenge.into_shared(), check_channel_exist(lock_args)));
+	}
+	Ok(
+		values
+			.into_iter()
+			.map(|(value, check)| {
+				if block_on(async move { check.await }) {
+					Some(value)
+				} else {
+					None
+				}
+			})
+			.filter(|value| value.is_some())
+			.map(|value| value.unwrap())
+			.collect::<Vec<_>>()
+	)
 }
 
 pub fn push_event(name: &str, value: Vec<Variant>) {

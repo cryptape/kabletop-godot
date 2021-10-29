@@ -55,6 +55,7 @@ impl Kabletop {
 		});
 		hook::add("close_kabletop_channel", |hash| {
 			push_event("channel_status", vec![false.to_variant(), hex::encode(hash).to_variant()]);
+			remove_signed_rounds(hex::encode(cache::get_clone().script_hash));
 		});
 		relay_hook::add("propose_connection", |_| {
 			push_event("connect_status", vec!["PARTNER".to_variant(), true.to_variant()]);
@@ -388,6 +389,7 @@ impl Kabletop {
 	fn close_channel(&self, _owner: &Node, callback: Ref<FuncRef>) {
 		thread::spawn(move || match close_kabletop_channel() {
 			Ok(hash) => {
+				remove_signed_rounds(hex::encode(cache::get_clone().script_hash));
 				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
 			},
 			Err(err) => {
@@ -397,23 +399,32 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn challenge_channel(
-		&self, _: &Node, lock_args: String, challenger: u8, hash: String, operations: Vec<String>, callback: Ref<FuncRef>
-	) {
-		let filename = format!("db/{}.json", hash);
-		match std::fs::read_to_string(filename) {
-			Ok(content) => match recover_signed_rounds(content) {
-				Ok(rounds) => {
-					challenge_kabletop_channel(lock_args, challenger, operations, rounds, handle_transaction(||{}, callback));
-				},
-				Err(err) => {
-					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_string().to_variant()]));
-				}
+	fn challenge_channel(&self, _: &Node, script_hash: String, challenger: u8, operations: Vec<String>, callback: Ref<FuncRef>) {
+		match recover_signed_rounds(script_hash) {
+			Ok((lock_args, rounds)) => {
+				challenge_kabletop_channel(lock_args, challenger, operations, rounds, handle_transaction(||{}, callback));
 			},
 			Err(err) => {
 				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_string().to_variant()]));
 			}
 		}
+	}
+
+	#[export]
+	fn remove_kabletop_log(&self, _owner: &Node, hexed_script_hash: String) -> bool {
+		remove_signed_rounds(hexed_script_hash)
+	}
+
+	#[export]
+	fn get_all_kabletop_logs(&self, _owner: &Node, callback: Ref<FuncRef>) {
+		thread::spawn(move || match scan_uncomplete_signed_rounds() {
+			Ok(logs) => {
+				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), logs.to_variant()]));
+			},
+			Err(error) => {
+				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
+			}
+		});
 	}
 
 	#[export]

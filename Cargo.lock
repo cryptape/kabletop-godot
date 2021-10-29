@@ -1961,8 +1961,11 @@ dependencies = [
 name = "kabletop-godot"
 version = "0.1.0"
 dependencies = [
+ "ckb-crypto",
+ "futures 0.3.17",
  "gdnative",
  "hex",
+ "kabletop-ckb-sdk",
  "kabletop-godot-sdk",
  "lazy_static",
  "molecule 0.7.2",
