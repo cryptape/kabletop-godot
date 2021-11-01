@@ -17,6 +17,7 @@ use std::{
 };
 use futures::executor::block_on;
 use ckb_crypto::secp::Signature;
+use ckb_types::prelude::Unpack;
 use molecule::prelude::Entity;
 
 #[derive(PartialEq, Copy, Clone)]
@@ -180,7 +181,7 @@ pub fn process_delay_funcs(delta_sec: f32) {
 	}
 }
 
-pub fn persist_signed_rounds() {
+pub fn persist_kabletop_log() {
 	let clone = cache::get_clone();
 	let filename = format!("db/{}.json", hex::encode(clone.script_hash));
 	let content = hex::encode(clone.script_args) + "\n" + clone.signed_rounds
@@ -192,7 +193,7 @@ pub fn persist_signed_rounds() {
 	std::fs::write(filename, content).expect("persist rounds");
 }
 
-pub fn remove_signed_rounds(hexed_script_hash: String) -> bool {
+pub fn remove_kabletop_log(hexed_script_hash: String) -> bool {
 	let filename = format!("db/{}.json", hexed_script_hash);
 	if let Ok(_) = std::fs::remove_file(filename) {
 		true
@@ -202,7 +203,7 @@ pub fn remove_signed_rounds(hexed_script_hash: String) -> bool {
 	}
 }
 
-pub fn recover_signed_rounds(hexed_script_hash: String) -> Result<(Vec<u8>, Vec<(Round, Signature)>), String> {
+pub fn recover_kabletop_log(hexed_script_hash: String) -> Result<(Vec<u8>, Vec<(Round, Signature)>), String> {
 	let filename = format!("db/{}.json", hexed_script_hash);
 	match std::fs::read_to_string(filename.clone()) {
 		Ok(content) => {
@@ -246,50 +247,65 @@ pub fn recover_signed_rounds(hexed_script_hash: String) -> Result<(Vec<u8>, Vec<
 	}
 }
 
-pub fn scan_uncomplete_signed_rounds() -> Result<Vec<Dictionary>, String> {
+pub fn scan_uncomplete_kakbeltop_log() -> Result<Vec<Dictionary>, String> {
 	let db = std::fs::read_dir("db").map_err(|err| err.to_string())?;
 	let mut values = vec![];
 	for path in db {
 		let path = path.map_err(|err| err.to_string())?.path();
-		let (lock_args, _) = recover_signed_rounds(String::from(path.to_str().unwrap()))?;
+		let (lock_args, rounds) = recover_kabletop_log(String::from(path.to_str().unwrap()))?;
 		let args = Args::from_slice(lock_args.as_slice()).map_err(|err| err.to_string())?;
 		let user1_pkhash: [u8; 20] = args.user1_pkhash().into();
 		let user2_pkhash: [u8; 20] = args.user2_pkhash().into();
 		let owner_pkhash = privkey_to_pkhash(&VARS.common.user_key.privkey);
 		let challenge = Dictionary::new();
-		if owner_pkhash[..] == user1_pkhash[..] {
-			challenge.insert("owner_pkhash", hex::encode(user1_pkhash));
-			challenge.insert("other_pkhash", hex::encode(user2_pkhash));
-			challenge.insert("owner_nfts_count", args.user1_nfts().len());
-			challenge.insert("other_nfts_count", args.user2_nfts().len());
-		} else if owner_pkhash[..] == user2_pkhash[..] {
-			challenge.insert("owner_pkhash", hex::encode(user2_pkhash));
-			challenge.insert("other_pkhash", hex::encode(user1_pkhash));
-			challenge.insert("owner_nfts_count", args.user2_nfts().len());
-			challenge.insert("other_nfts_count", args.user1_nfts().len());
+		if owner_pkhash[..] == user1_pkhash[..] || owner_pkhash[..] == user2_pkhash[..] {
+			challenge.insert("user1_pkhash", hex::encode(user1_pkhash));
+			challenge.insert("user2_pkhash", hex::encode(user2_pkhash));
+			challenge.insert("user1_nfts_count", args.user1_nfts().len());
+			challenge.insert("user2_nfts_count", args.user2_nfts().len());
 		} else {
 			continue
 		}
 		let staking_ckb: u64 = args.user_staking_ckb().into();
 		let blocknumber: u64 = args.begin_blocknumber().into();
+		let round_count = {
+			if rounds.len() > 30 {
+				30
+			} else if rounds.len() < 5 {
+				5
+			} else {
+				rounds.len() as u64
+			}
+		};
 		challenge.insert("staking_ckb", staking_ckb);
-		challenge.insert("begin_blocknumber", blocknumber);
-		values.push((challenge.into_shared(), check_channel_exist(lock_args)));
+		challenge.insert("round_count", round_count);
+		challenge.insert("block_countdown", blocknumber + round_count * round_count);
+		values.push((challenge, get_kabletop_channel_cell(lock_args)));
 	}
-	Ok(
-		values
-			.into_iter()
-			.map(|(value, check)| {
-				if block_on(async move { check.await }) {
-					Some(value)
+	let values = values
+		.into_iter()
+		.map(|(value, check)| block_on(async move { check.await }).map(|kabletop_cell| {
+			if let Some((cell, challenge)) = kabletop_cell {
+				let capacity: u64 = cell.capacity().unpack();
+				let staking_ckb = value.get("staking_ckb").to_u64();
+				let bet_ckb = capacity / 2 - staking_ckb;
+				value.insert("bet_ckb", bet_ckb);
+				if let Some(challenge) = challenge {
+					let challenger: u8 = challenge.challenger().into();
+					value.insert("challenger", challenger);
 				} else {
-					None
+					value.insert("challenger", 0);
 				}
-			})
-			.filter(|value| value.is_some())
-			.map(|value| value.unwrap())
-			.collect::<Vec<_>>()
-	)
+				Some(value.into_shared())
+			} else {
+				None
+			}
+		}))
+		.collect::<Result<Vec<_>, _>>()?
+		.into_iter()
+		.filter_map(|value| value)
+		.collect::<Vec<_>>();
+	Ok(values)
 }
 
 pub fn push_event(name: &str, value: Vec<Variant>) {
