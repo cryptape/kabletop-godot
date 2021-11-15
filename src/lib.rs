@@ -29,33 +29,25 @@ impl Kabletop {
 		// set hooks
 		hook::add("sync_operation", |operation| {
 			let value = String::from_utf8(operation.clone()).unwrap();
-			run_code(value);
+			run_code(value, true);
 		});
 		hook::add("switch_round", |signature| {
 			randomseed(signature);
-			persist_kabletop_log();
+			persist_kabletop_cache();
 		});
 		hook::add("open_kabletop_channel", |hash| {
 			let store = cache::get_clone();
-			let mut ckb_time: i64 = 0;
-			for i in 0..8 {
-				ckb_time = (ckb_time << 8) | (store.script_hash[i] as i64 >> 1);
-			}
-			let mut ckb_clock: i64 = 0;
-			for i in 8..16 {
-				ckb_clock = (ckb_clock << 8) | (store.script_hash[i] as i64 >> 1);
-			}
-			let lua = Lua::new(ckb_time, ckb_clock);
+			let lua = Lua::new(0, 0);
 			lua.inject_nfts(from_nfts(store.opponent_nfts.clone()), from_nfts(store.user_nfts.clone()));
 			lua.boost(get_lua_entry());
 			set_lua(lua);
-			randomseed(hash);
+			randomseed(&store.script_hash);
 			push_event("channel_status", vec![true.to_variant(), hex::encode(hash).to_variant()]);
-			persist_kabletop_log();
+			persist_kabletop_cache();
 		});
 		hook::add("close_kabletop_channel", |hash| {
 			push_event("channel_status", vec![false.to_variant(), hex::encode(hash).to_variant()]);
-			remove_kabletop_log(hex::encode(cache::get_clone().script_hash));
+			remove_kabletop_cache(hex::encode(cache::get_clone().script_hash));
 		});
 		relay_hook::add("propose_connection", |_| {
 			push_event("connect_status", vec!["PARTNER".to_variant(), true.to_variant()]);
@@ -165,7 +157,7 @@ impl Kabletop {
     #[export]
     fn _ready(&mut self, owner: TRef<Node>) {
         godot_print!("welcome to the kabletop world!");
-		set_emitor(owner.claim());
+		set_godot_emitor(owner.claim());
 		// update_owned_nfts();
 		update_box_status();
     }
@@ -173,7 +165,7 @@ impl Kabletop {
 	#[export]
 	fn _process(&mut self, _owner: &Node, delta: f32) {
 		if let Ok(mut events) = EVENTS.try_lock() {
-			if let Some(emitor) = get_emitor() {
+			if let Some(emitor) = get_godot_emitor() {
 				for (name, value) in &*events {
 					if name == "owned_nfts_updated" {
 						self.nfts = vec![];
@@ -297,8 +289,26 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn get_player_id(&self, _owner: &Node) -> i64 {
-		cache::get_clone().user_type as i64
+	fn get_cache(&self, _owner: &Node) -> Dictionary {
+		let clone = cache::get_clone();
+		let value = Dictionary::new();
+		value.insert("staking_ckb", clone.staking_ckb);
+		value.insert("bet_ckb", clone.bet_ckb);
+		value.insert("script_hash", hex::encode(clone.script_hash));
+		value.insert("tx_hash", hex::encode(clone.channel_hash));
+		value.insert("capacity", clone.capacity);
+		value.insert("max_nfts_count", clone.max_nfts_count);
+		value.insert("user_nfts", clone.user_nfts.iter().map(|v| hex::encode(v)).collect::<Vec<_>>());
+		value.insert("opponent_nfts", clone.opponent_nfts.iter().map(|v| hex::encode(v)).collect::<Vec<_>>());
+		value.insert("user_pkhash", hex::encode(clone.user_pkhash));
+		value.insert("opponent_pkhash", hex::encode(clone.opponent_pkhash));
+		value.insert("winner", clone.winner);
+		value.insert("round", clone.round);
+		value.insert("round_owner", clone.round_owner);
+		value.insert("user_type", clone.user_type);
+		value.insert("opponent_type", clone.opponent_type);
+		value.insert("round_operations", clone.round_operations);
+		value.into_shared()
 	}
 
 	#[export]
@@ -310,7 +320,7 @@ impl Kabletop {
 		if let Err(err) = result {
 			return err.to_variant();
 		}
-		set_mode(P2pMode::Client);
+		set_p2p_mode(P2pMode::Client);
 		push_event("connect_status", vec!["CLIENT".to_variant(), true.to_variant()]);
 		Variant::default()
 	}
@@ -336,7 +346,7 @@ impl Kabletop {
 		if let Err(err) = result {
 			return err.to_variant();
 		}
-		set_mode(P2pMode::Server);
+		set_p2p_mode(P2pMode::Server);
 		Variant::default()
 	}
 
@@ -350,7 +360,7 @@ impl Kabletop {
 		if self.nfts.len() == 0 {
 			return "empty nfts".to_variant();
 		}
-		if get_mode() != P2pMode::Client {
+		if get_p2p_mode() != P2pMode::Client {
 			return "no client mode".to_variant();
 		}
 		cache::init(cache::PLAYER_TYPE::ONE);
@@ -359,24 +369,16 @@ impl Kabletop {
 		thread::spawn(move || match client::open_kabletop_channel() {
 			Ok(hash) => {
 				// create lua vm
-				let channel = cache::get_clone();
-				let mut ckb_time: i64 = 0;
-				for i in 0..8 {
-					ckb_time = (ckb_time << 8) | (channel.script_hash[i] as i64 >> 1);
-				}
-				let mut ckb_clock: i64 = 0;
-				for i in 8..16 {
-					ckb_clock = (ckb_clock << 8) | (channel.script_hash[i] as i64 >> 1);
-				}
-				let lua = Lua::new(ckb_time, ckb_clock);
-				lua.inject_nfts(from_nfts(channel.user_nfts.clone()), from_nfts(channel.opponent_nfts.clone()));
+				let clone = cache::get_clone();
+				let lua = Lua::new(0, 0);
+				lua.inject_nfts(from_nfts(clone.user_nfts.clone()), from_nfts(clone.opponent_nfts.clone()));
 				lua.boost(get_lua_entry());
 				set_lua(lua);
 
 				// set first randomseed and callback to gdscript
-				randomseed(&hash);
+				randomseed(&clone.script_hash);
 				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
-				persist_kabletop_log();
+				persist_kabletop_cache();
 			},
 			Err(err) => {
 				FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), err.to_variant()]));
@@ -386,23 +388,44 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn close_channel(&self, _owner: &Node, callback: Ref<FuncRef>) {
-		thread::spawn(move || match close_kabletop_channel() {
-			Ok(hash) => {
-				remove_kabletop_log(hex::encode(cache::get_clone().script_hash));
-				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
-			},
-			Err(err) => {
-				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_variant()]));
+	fn close_channel(&self, _owner: &Node, from_challenge: bool, callback: Ref<FuncRef>) {
+		let store = cache::get_clone();
+		thread::spawn(move || {
+			if from_challenge {
+				let signed_rounds = cache::get_kabletop_signed_rounds().unwrap();
+				let winner = match store.winner {
+					0 => store.user_type,
+					_ => store.winner
+				};
+				let script_hash = store.script_hash;
+				close_challenged_kabletop_channel(
+					store.script_args, store.user_type, winner, signed_rounds, handle_transaction(move || {
+						remove_kabletop_cache(hex::encode(script_hash));
+					}, callback)
+				)
+			} else {
+				match close_kabletop_channel() {
+					Ok(hash) => {
+						remove_kabletop_cache(hex::encode(store.script_hash));
+						FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), hex::encode(hash).to_variant()]));
+					},
+					Err(err) => {
+						FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_variant()]));
+					}
+				}
 			}
 		});
 	}
 
 	#[export]
-	fn challenge_channel(&self, _: &Node, script_hash: String, challenger: u8, operations: Vec<String>, callback: Ref<FuncRef>) {
-		match recover_kabletop_log(script_hash) {
-			Ok((lock_args, rounds)) => {
-				challenge_kabletop_channel(lock_args, challenger, operations, rounds, handle_transaction(||{}, callback));
+	fn challenge_channel(&self, _: &Node, script_hash: String, callback: Ref<FuncRef>) {
+		match cache::recover(script_hash) {
+			Ok(store) => {
+				let signed_rounds = cache::get_kabletop_signed_rounds().unwrap();
+				let codes = dump_cached_codes(false);
+				challenge_kabletop_channel(
+					store.script_args, store.user_type, codes, signed_rounds, handle_transaction(|| {}, callback)
+				);
 			},
 			Err(err) => {
 				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_string().to_variant()]));
@@ -411,15 +434,10 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn remove_kabletop_log(&self, _owner: &Node, hexed_script_hash: String) -> bool {
-		remove_kabletop_log(hexed_script_hash)
-	}
-
-	#[export]
-	fn get_all_kabletop_logs(&self, _owner: &Node, callback: Ref<FuncRef>) {
-		thread::spawn(move || match scan_uncomplete_kakbeltop_log() {
-			Ok(logs) => {
-				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), logs.to_variant()]));
+	fn get_uncomplete_kabletop_caches(&self, _owner: &Node, callback: Ref<FuncRef>) {
+		thread::spawn(move || match scan_uncomplete_kabletop_cache() {
+			Ok(caches) => {
+				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), caches.to_variant()]));
 			},
 			Err(error) => {
 				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
@@ -428,10 +446,10 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn close_game(&self, _owner: &Node, winner: u8, callback: Ref<FuncRef>) {
+	fn close_game(&self, _owner: &Node, winner: u8, from_challenge: bool, callback: Ref<FuncRef>) {
 		cache::set_winner(winner);
 		let store = cache::get_clone();
-		if store.round_owner == store.user_type {
+		if store.round_owner == store.user_type && !from_challenge {
 			thread::spawn(move || {
 				if let Err(error) = notify_game_over() {
 					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
@@ -445,32 +463,48 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn sync(&self, _owner: &Node, code: String, terminal: bool, callback: Ref<FuncRef>) {
+	fn sync(&self, _owner: &Node, terminal: bool, callback: Ref<FuncRef>) {
+		let codes = dump_cached_codes(true);
 		thread::spawn(move || {
-			if let Err(error) = sync_operation(code) {
-				FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
-				return
+			for code in codes {
+				if let Err(error) = sync_operation(code) {
+					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
+					return
+				}
 			}
 			if terminal {
 				match switch_round() {
 					Ok(signature) => {
+						remove_cached_codes();
 						randomseed(&signature);
 						FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), Variant::default()]));
-						persist_kabletop_log();
+						persist_kabletop_cache();
 					},
 					Err(error) => {
 						FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
 					}
 				}
 			} else {
+				persist_kabletop_cache();
 				FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), Variant::default()]));
 			}
 		});
 	}
 
 	#[export]
-	fn run(&self, _owner: &Node, code: String) {
-		run_code(code);
+	fn run(&self, _owner: &Node, code: String, effective: bool) {
+		run_code(code.clone(), true);
+		if effective {
+			CODES.lock().unwrap().push((code, false));
+		}
+	}
+
+	#[export]
+	fn replay(&self, _owner: &Node, script_hash: String) -> Variant {
+		match replay_kabletop_cache(script_hash) {
+			Ok(_)    => Variant::default(),
+			Err(err) => err.to_variant()
+		}
 	}
 
 	#[export]

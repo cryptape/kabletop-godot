@@ -1,13 +1,17 @@
-use kabletop_ckb_sdk::ckb::{
-	wallet::keystore, rpc::{
-		types::{
-			SearchKey, ScriptType
-		}, methods::{
-			send_transaction, get_transaction, get_live_nfts, get_live_cells
-		}
-	}, transaction::{
-		builder::*, helper::*, channel::protocol::{
-			Round, Challenge
+use kabletop_ckb_sdk::{
+	config::VARS, ckb::{
+		wallet::keystore, rpc::{
+			types::{
+				SearchKey, ScriptType
+			}, methods::{
+				send_transaction, get_transaction, get_live_nfts, get_live_cells
+			}
+		}, transaction::{
+			builder::*, helper::*, channel::{
+				interact as channel, protocol::{
+					Round, Challenge
+				}
+			}
 		}
 	}
 };
@@ -15,13 +19,13 @@ use futures::{
 	executor::block_on, future::BoxFuture
 };
 use ckb_types::{
-	core::TransactionView, prelude::Pack, packed::CellOutput
+	core::TransactionView, prelude::Pack
 };
 use std::{
 	thread, time::Duration, collections::HashMap
 };
-use ckb_crypto::secp::Signature;
 use molecule::prelude::Entity;
+use ckb_crypto::secp::Signature;
 pub use ckb_types::H256;
 
 // get user owned nfts by their lock_script (from user_pkhash) and type_script (from composer_pkhash)
@@ -219,13 +223,43 @@ where
 
 // challenge specified kabletop channel on-chain
 pub fn challenge_kabletop_channel<F>(
-	channel_args: Vec<u8>, challenger: u8, pending_operations: Vec<String>, rounds: Vec<(Round, Signature)>, f: F
+	script_args: Vec<u8>, challenger: u8, operations: Vec<String>, mut signed_rounds: Vec<(Round, Signature)>, f: F
 ) where
 	F: Fn(Result<H256, String>) + Send + 'static
 {
 	thread::spawn(move || {
-		match block_on(build_tx_challenge_channel(channel_args, challenger, pending_operations.into(), rounds)) {
+		match block_on(get_kabletop_challenge_data(script_args.clone())) {
+			Ok((true, data)) => {
+				if let Some(data) = data {
+					let last_challenger: u8 = data.challenger().into();
+					if last_challenger == challenger {
+						return f(Err(String::from("dumplicate challenge")))
+					}
+					let last_operations = Vec::from(data.operations())
+						.into_iter()
+						.map(|bytes| String::from_utf8(bytes).unwrap())
+						.collect::<Vec<_>>();
+					let last_round = channel::make_round(last_challenger, last_operations);
+					let script_hash = kabletop_script(script_args.clone()).calc_script_hash();
+					let signature = channel::sign_channel_round(
+						script_hash, signed_rounds.clone(), last_round.clone(), &VARS.common.user_key.privkey
+					);
+					if let Err(error) = signature {
+						return f(Err(error.to_string()))
+					}
+					signed_rounds.push((last_round, signature.unwrap()));
+				}
+			},
+			Ok((false, _)) => return f(Err(String::from("invalid script_args, can't find valid kabletop cell"))),
+			Err(err)       => return f(Err(err)) 
+		};
+		match block_on(build_tx_challenge_channel(script_args, challenger, operations.into(), signed_rounds)) {
 			Ok(tx) => {
+				// write tx to file for debug
+				let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
+				let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
+				std::fs::write("challenge_kabletop_channel.json", json).expect("write json file");
+
 				match push_transaction(tx) {
 					Ok(hash) => f(Ok(hash)),
 					Err(err) => f(Err(err.to_string()))
@@ -236,22 +270,72 @@ pub fn challenge_kabletop_channel<F>(
 	});
 }
 
+pub fn close_challenged_kabletop_channel<F>(
+	script_args: Vec<u8>, challenger: u8, winner: u8, mut signed_rounds: Vec<(Round, Signature)>, f: F
+) where
+	F: Fn(Result<H256, String>) + Send + 'static
+{
+	thread::spawn(move || {
+		let mut from_challenge = true;
+		match block_on(get_kabletop_challenge_data(script_args.clone())) {
+			Ok((true, data)) => {
+				if let Some(data) = data {
+					let last_challenger: u8 = data.challenger().into();
+					if last_challenger != challenger {
+						let last_operations = Vec::from(data.operations())
+							.into_iter()
+							.map(|bytes| String::from_utf8(bytes).unwrap())
+							.collect::<Vec<_>>();
+						let last_round = channel::make_round(last_challenger, last_operations);
+						let script_hash = kabletop_script(script_args.clone()).calc_script_hash();
+						let signature = channel::sign_channel_round(
+							script_hash, signed_rounds.clone(), last_round.clone(), &VARS.common.user_key.privkey
+						);
+						if let Err(error) = signature {
+							return f(Err(error.to_string()))
+						}
+						signed_rounds.push((last_round, signature.unwrap()));
+					}
+				} else {
+					from_challenge = false;
+				}
+			},
+			Ok((false, _)) => return f(Err(String::from("invalid script_args, can't find valid kabletop cell"))),
+			Err(err)       => return f(Err(err.to_string()))
+		}
+		match block_on(build_tx_close_channel(script_args, signed_rounds, winner, from_challenge)) {
+			Ok(tx) => {
+				// write tx to file for debug
+				let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
+				let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
+				std::fs::write("close_challenged_kabletop_channel.json", json).expect("write json file");
+
+				match push_transaction(tx) {
+					Ok(hash) => f(Ok(hash)),
+					Err(err) => f(Err(err.to_string()))
+				}
+			},
+			Err(err) => return f(Err(err.to_string()))
+		}
+	});
+}
+
 // check the lock_script generated by specified script_args is matched with one live cell on chain
-pub fn get_kabletop_channel_cell(script_args: Vec<u8>) -> BoxFuture<'static, Result<Option<(CellOutput, Option<Challenge>)>, String>> {
+pub fn get_kabletop_challenge_data(script_args: Vec<u8>) -> BoxFuture<'static, Result<(bool, Option<Challenge>), String>> {
 	let lock_script = kabletop_script(script_args);
 	let key = SearchKey::new(lock_script.into(), ScriptType::Lock);
 	Box::pin(async move {
 		match get_live_cells(key, 1, None).await {
 			Ok(channel) => {
 				if channel.objects.is_empty() {
-					Ok(None)
+					Ok((false, None))
 				} else {
 					let object = channel.objects.get(0).unwrap();
 					let challenge = match Challenge::from_slice(&object.output_data.to_vec()) {
-						Ok(value) => Some(value),
-						Err(_)    => None
+						Ok(data) => Some(data),
+						Err(_)   => None
 					};
-					Ok(Some((object.output.clone(), challenge)))
+					Ok((true, challenge))
 				}
 			},
 			Err(err) => Err(err.to_string())

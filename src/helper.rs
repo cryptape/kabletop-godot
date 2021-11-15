@@ -1,24 +1,22 @@
 use gdnative::prelude::*;
 use gdnative::api::*;
+use futures::executor::block_on;
+use molecule::prelude::Entity;
 use kabletop_godot_sdk::{
 	lua::highlevel::Lua, cache, lua, ckb::*, p2p::{
 		client, server, protocol::types::GodotType, protocol_relay::types::ClientInfo
 	}
 };
 use kabletop_ckb_sdk::{
-	config::VARS, ckb::transaction::{
-		helper::privkey_to_pkhash, channel::protocol::{
-			Args, Round
-		}
+	config::VARS, ckb::{
+		rpc::methods::get_tip_block_number, transaction::{
+			helper::privkey_to_pkhash, channel::protocol::Challenge
+		} 
 	}
 };
 use std::{
 	sync::Mutex, thread, convert::TryInto, collections::HashMap
 };
-use futures::executor::block_on;
-use ckb_crypto::secp::Signature;
-use ckb_types::prelude::Unpack;
-use molecule::prelude::Entity;
 
 #[derive(PartialEq, Copy, Clone)]
 pub enum P2pMode {
@@ -30,6 +28,7 @@ lazy_static::lazy_static! {
 	pub static ref LUAENTRY: Mutex<String>                            = Mutex::new(String::new());
 	pub static ref EVENTS:   Mutex<Vec<(String, Vec<Variant>)>>       = Mutex::new(vec![]);
 	pub static ref FUNCREFS: Mutex<Vec<(Ref<FuncRef>, Vec<Variant>)>> = Mutex::new(vec![]);
+	pub static ref CODES:    Mutex<Vec<(String, bool)>>               = Mutex::new(vec![]);
 	pub static ref LUA:      Mutex<Option<Lua>>                       = Mutex::new(None);
 	pub static ref NFTS:     Mutex<Option<Variant>>                   = Mutex::new(None);
 	pub static ref STATUS:   Mutex<Option<(u8, bool)>>                = Mutex::new(None);
@@ -37,11 +36,11 @@ lazy_static::lazy_static! {
 	pub static ref DELAIES:  Mutex<HashMap<String, Vec<(f32, Box<dyn Fn() + 'static + Send + Sync>)>>> = Mutex::new(HashMap::new());
 }
 
-pub fn set_emitor(godot_node: Ref<Node>) {
+pub fn set_godot_emitor(godot_node: Ref<Node>) {
 	*EMITOR.lock().unwrap() = Some(godot_node);
 }
 
-pub fn get_emitor() -> Option<Ref<Node>> {
+pub fn get_godot_emitor() -> Option<Ref<Node>> {
 	*EMITOR.lock().unwrap()
 }
 
@@ -60,7 +59,7 @@ pub fn randomseed(seed: &[u8]) {
 	};
 	let seed_1 = i64::from_le_bytes(seed[..8].try_into().unwrap());
 	let seed_2 = i64::from_le_bytes(seed[8..].try_into().unwrap());
-	run_code(format!("math.randomseed({}, {})", seed_1, seed_2));
+	run_code(format!("math.randomseed({}, {})", seed_1, seed_2), false);
 }
 
 pub fn set_lua(lua: Lua) {
@@ -75,7 +74,15 @@ pub fn unset_lua() {
 	*LUA.lock().unwrap() = None;
 }
 
-pub fn run_code(code: String) -> bool {
+pub fn set_p2p_mode(mode: P2pMode) {
+	*P2PMODE.lock().unwrap() = mode;
+}
+
+pub fn get_p2p_mode() -> P2pMode {
+	*P2PMODE.lock().unwrap()
+}
+
+pub fn run_code(code: String, emit: bool) -> bool {
 	if let Some(lua) = LUA.lock().unwrap().as_ref() {
 		let events = lua
 			.run(code.clone())
@@ -86,19 +93,51 @@ pub fn run_code(code: String) -> bool {
 					match field {
 						lua::ffi::lua_Event::Number(value)      => params.push(value.to_variant()),
 						lua::ffi::lua_Event::String(value)      => params.push(value.to_variant()),
-						lua::ffi::lua_Event::NumberTable(value) => params.push(value.to_variant())
+						lua::ffi::lua_Event::NumberTable(value) => params.push(value.to_variant()),
+						lua::ffi::lua_Event::StringTable(value) => params.push(value.to_variant())
 					}
 				}
 				params
 			})
 			.collect::<Vec<Vec<_>>>();
-		if events.len() > 0 {
+		if events.len() > 0 && emit {
 			push_event("lua_events", vec![events.to_variant()]);
 		}
 		true
 	} else {
 		false
 	}
+}
+
+pub fn dump_cached_codes(from_sync: bool) -> Vec<String> {
+	if from_sync {
+		let mut codes = vec![];
+		for (code, commited) in &mut *CODES.lock().unwrap() {
+			if commited == &mut false {
+				codes.push(code.clone());
+				*commited = true;
+			}
+		}
+		codes
+	} else {
+		CODES.lock().unwrap().iter().map(|(code, _)| code.clone()).collect::<Vec<_>>()
+	}
+}
+
+pub fn remove_cached_codes() {
+	let codes = CODES
+		.lock()
+		.unwrap()
+		.iter()
+		.filter_map(|(code, commited)| {
+			if !commited {
+				Some((code.clone(), false))
+			} else {
+				None
+			}
+		})
+		.collect::<Vec<_>>();
+	*CODES.lock().unwrap() = codes;
 }
 
 pub fn handle_transaction<F>(f: F, callback: Ref<FuncRef>) -> Box<dyn Fn(Result<H256, String>) + 'static + Send> 
@@ -181,131 +220,145 @@ pub fn process_delay_funcs(delta_sec: f32) {
 	}
 }
 
-pub fn persist_kabletop_log() {
-	let clone = cache::get_clone();
-	let filename = format!("db/{}.json", hex::encode(clone.script_hash));
-	let content = hex::encode(clone.script_args) + "\n" + clone.signed_rounds
-		.into_iter()
-		.map(|(round, signature)| format!("{}|{}", hex::encode(signature.serialize()), hex::encode(round.as_slice())))
-		.collect::<Vec<_>>()
-		.join("\n")
-		.as_str();
-	std::fs::write(filename, content).expect("persist rounds");
+pub fn persist_kabletop_cache() {
+	let filename = hex::encode(cache::get_clone().script_hash);
+	cache::persist(filename).expect("persist");
 }
 
-pub fn remove_kabletop_log(hexed_script_hash: String) -> bool {
-	let filename = format!("db/{}.json", hexed_script_hash);
+pub fn remove_kabletop_cache(script_hash: String) -> bool {
+	let filename = format!("db/{}.json", script_hash);
 	if let Ok(_) = std::fs::remove_file(filename) {
 		true
 	} else {
-		println!("file {} not found", hexed_script_hash);
+		println!("file {}.json not found", script_hash);
 		false
 	}
 }
 
-pub fn recover_kabletop_log(hexed_script_hash: String) -> Result<(Vec<u8>, Vec<(Round, Signature)>), String> {
-	let filename = format!("db/{}.json", hexed_script_hash);
-	match std::fs::read_to_string(filename.clone()) {
-		Ok(content) => {
-			let mut lock_args = None;
-			let mut signed_rounds = vec![];
-			content
-				.split("\n")
-				.for_each(|encode| {
-					let values = String::from(encode).split("|").map(|v| v.into()).collect::<Vec<String>>();
-					match values.len() {
-						1 => {
-							if lock_args.is_none() {
-								if let Ok(script_args) = hex::decode(values[0].as_str()) {
-									lock_args = Some(script_args);
-								}
-							}
-						},
-						2 => {
-							if signed_rounds.is_empty() {
-								if let Ok(round) = hex::decode(values[0].as_str()) {
-									if let Ok(signature) = hex::decode(values[1].as_str()) {
-										if let Ok(round) = Round::from_slice(round.as_slice()) {
-											if let Ok(signature) = Signature::from_slice(signature.as_slice()) {
-												signed_rounds.push((round, signature));
-											}
-										}
-									}
-								}
-							}
-						},
-						_ => {},
-					}
-				});
-			if lock_args.is_none() || signed_rounds.is_empty() {
-				Err(format!("persisted kabletop log {} format error", filename))
-			} else {
-				Ok((lock_args.unwrap(), signed_rounds))
-			}
-		},
-		Err(err) => Err(err.to_string())
-	}
-}
-
-pub fn scan_uncomplete_kakbeltop_log() -> Result<Vec<Dictionary>, String> {
+pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
 	let db = std::fs::read_dir("db").map_err(|err| err.to_string())?;
+	let tipnumber = get_tip_block_number().map_err(|err| err.to_string())?;
 	let mut values = vec![];
 	for path in db {
-		let path = path.map_err(|err| err.to_string())?.path();
-		let (lock_args, rounds) = recover_kabletop_log(String::from(path.to_str().unwrap()))?;
-		let args = Args::from_slice(lock_args.as_slice()).map_err(|err| err.to_string())?;
-		let user1_pkhash: [u8; 20] = args.user1_pkhash().into();
-		let user2_pkhash: [u8; 20] = args.user2_pkhash().into();
+		let script_hash = {
+			let filename = path.map_err(|err| err.to_string())?.file_name();
+			let filename = String::from(filename.to_str().unwrap());
+			String::from(filename.strip_suffix(".json").unwrap())
+		};
+		let store = cache::recover(script_hash.clone())?;
+		if let Ok(hash) = hex::decode(script_hash.clone()) {
+			if hash[..] != store.script_hash[..] {
+				println!("skip unmatched cache file {}.json", script_hash);
+				continue
+			}
+		} else {
+			println!("skip invalid cache file {}.json", script_hash);
+			continue
+		}
+		let lock_args = cache::get_kabletop_args()?;
+		let signed_rounds = cache::get_kabletop_signed_rounds()?;
+		let user1_pkhash: [u8; 20] = lock_args.user1_pkhash().into();
+		let user2_pkhash: [u8; 20] = lock_args.user2_pkhash().into();
 		let owner_pkhash = privkey_to_pkhash(&VARS.common.user_key.privkey);
 		let challenge = Dictionary::new();
 		if owner_pkhash[..] == user1_pkhash[..] || owner_pkhash[..] == user2_pkhash[..] {
+			let user1_nfts = Vec::from(lock_args.user1_nfts()).iter().map(|nft| hex::encode(nft)).collect::<Vec<_>>();
+			let user2_nfts = Vec::from(lock_args.user2_nfts()).iter().map(|nft| hex::encode(nft)).collect::<Vec<_>>();
 			challenge.insert("user1_pkhash", hex::encode(user1_pkhash));
 			challenge.insert("user2_pkhash", hex::encode(user2_pkhash));
-			challenge.insert("user1_nfts_count", args.user1_nfts().len());
-			challenge.insert("user2_nfts_count", args.user2_nfts().len());
+			challenge.insert("user1_nfts", user1_nfts);
+			challenge.insert("user2_nfts", user2_nfts);
+			if owner_pkhash[..] == user1_pkhash[..] {
+				challenge.insert("user_type", 1);
+			} else {
+				challenge.insert("user_type", 2);
+			}
 		} else {
 			continue
 		}
-		let staking_ckb: u64 = args.user_staking_ckb().into();
-		let blocknumber: u64 = args.begin_blocknumber().into();
-		let round_count = {
-			if rounds.len() > 30 {
-				30
-			} else if rounds.len() < 5 {
-				5
-			} else {
-				rounds.len() as u64
+		let blocknumber: u64 = lock_args.begin_blocknumber().into();
+		let countdown = {
+			let mut round_count = signed_rounds.len() as u64;
+			if signed_rounds.len() > 30 {
+				round_count = 30;
+			} else if signed_rounds.len() < 5 {
+				round_count = 5;
 			}
+			let targetnumber = blocknumber + round_count * round_count;
+			std::cmp::max(targetnumber, tipnumber) - tipnumber
 		};
-		challenge.insert("staking_ckb", staking_ckb);
-		challenge.insert("round_count", round_count);
-		challenge.insert("block_countdown", blocknumber + round_count * round_count);
-		values.push((challenge, get_kabletop_channel_cell(lock_args)));
+		challenge.insert("script_hash", hex::encode(store.script_hash));
+		challenge.insert("staking_ckb", store.staking_ckb / 100_000_000);
+		challenge.insert("bet_ckb", store.bet_ckb / 100_000_000);
+		challenge.insert("round_count", signed_rounds.len());
+		challenge.insert("block_countdown", countdown);
+		values.push((challenge, get_kabletop_challenge_data(lock_args.as_slice().to_vec())));
 	}
 	let values = values
 		.into_iter()
-		.map(|(value, check)| block_on(async move { check.await }).map(|kabletop_cell| {
-			if let Some((cell, challenge)) = kabletop_cell {
-				let capacity: u64 = cell.capacity().unpack();
-				let staking_ckb = value.get("staking_ckb").to_u64();
-				let bet_ckb = capacity / 2 - staking_ckb;
-				value.insert("bet_ckb", bet_ckb);
-				if let Some(challenge) = challenge {
-					let challenger: u8 = challenge.challenger().into();
-					value.insert("challenger", challenger);
-				} else {
-					value.insert("challenger", 0);
-				}
-				Some(value.into_shared())
+		.map(|(value, check)| block_on(async move { check.await }).map(|challenge| {
+			if let (true, challenge) = challenge {
+				let challenge = match challenge {
+					Some(value) => value,
+					None        => Challenge::default()
+				};
+				let challenger: u8 = challenge.challenger().into();
+				let operations: Vec<String> = {
+					let operations: Vec<Vec<u8>> = challenge.operations().into();
+					match operations.into_iter().map(|v| String::from_utf8(v)).collect::<Result<Vec<_>, _>>() {
+						Ok(value) => value,
+						Err(_)    => return None
+					}
+				};
+				value.insert("operations", operations);
+				value.insert("challenger", challenger);
 			} else {
-				None
+				return None
 			}
+			Some(value.into_shared())
 		}))
 		.collect::<Result<Vec<_>, _>>()?
 		.into_iter()
 		.filter_map(|value| value)
 		.collect::<Vec<_>>();
 	Ok(values)
+}
+
+pub fn replay_kabletop_cache(script_hash: String) -> Result<(), String> {
+	let hash = hex::decode(script_hash.clone());
+	if let Err(error) = hash {
+		return Err(error.to_string())
+	}
+	let store = cache::recover(script_hash)?;
+	let lock_args = cache::get_kabletop_args()?;
+	let signed_rounds = cache::get_kabletop_signed_rounds()?;
+	let lua = Lua::new(0, 0);
+	lua.inject_nfts(from_nfts(lock_args.user1_nfts().into()), from_nfts(lock_args.user2_nfts().into()));
+	lua.boost(get_lua_entry());
+	set_lua(lua);
+	randomseed(hash.unwrap().as_slice());
+	for (round, signature) in signed_rounds {
+		let operations: Vec<String> = {
+			let operations: Vec<Vec<u8>> = round.operations().into();
+			match operations.into_iter().map(|v| String::from_utf8(v)).collect::<Result<Vec<_>, _>>() {
+				Ok(value)  => value,
+				Err(error) => return Err(error.to_string())
+			}
+		};
+		for code in operations {
+			run_code(code, false);
+		}
+		randomseed(signature.serialize().as_slice());
+	}
+	let user1_pkhash: [u8; 20] = lock_args.user1_pkhash().into();
+	let user2_pkhash: [u8; 20] = lock_args.user2_pkhash().into();
+	let owner_pkhash = privkey_to_pkhash(&VARS.common.user_key.privkey);
+	if (owner_pkhash[..] == user1_pkhash[..] && store.user_type != 1)
+		|| (owner_pkhash[..] == user2_pkhash[..] && store.user_type != 2)
+		|| (owner_pkhash[..] != user1_pkhash[..] && owner_pkhash[..] != user2_pkhash[..]) {
+		return Err(String::from("owner pkhash dosen't match both of two users"))
+	}
+	Ok(())
 }
 
 pub fn push_event(name: &str, value: Vec<Variant>) {
@@ -390,14 +443,6 @@ pub fn init_panic_hook() {
             }
         }
     }));
-}
-
-pub fn set_mode(mode: P2pMode) {
-	*P2PMODE.lock().unwrap() = mode;
-}
-
-pub fn get_mode() -> P2pMode {
-	*P2PMODE.lock().unwrap()
 }
 
 pub fn close_kabletop_channel() -> Result<[u8; 32], String> {

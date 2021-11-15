@@ -1,11 +1,17 @@
 use ckb_crypto::secp::Signature;
 use std::sync::Mutex;
+use molecule::prelude::Entity;
 use kabletop_ckb_sdk::{
 	config::VARS, ckb::transaction::{
 		helper::fee as str_to_capacity, channel::{
-			protocol::Round, interact::make_round
+			interact::make_round, protocol::{
+				Round, Args
+			}
 		}
 	}
+};
+use serde::{
+    Deserialize, Serialize
 };
 
 pub enum PLAYER_TYPE {
@@ -17,7 +23,7 @@ lazy_static! {
 }
 
 // a cache to temporarily store channel consensus data
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChannelCache {
 	// for kabletop state channel
 	pub staking_ckb:     u64,
@@ -39,7 +45,7 @@ pub struct ChannelCache {
 	pub user_type:        u8,
 	pub opponent_type:    u8,
 	pub round_operations: Vec<String>,
-	pub signed_rounds:    Vec<(Round, Signature)>
+	pub signed_rounds:    Vec<(Vec<u8>, Vec<u8>)>
 }
 
 impl Default for ChannelCache {
@@ -130,14 +136,14 @@ pub fn set_opponent_pkhash(pkhash: [u8; 20]) {
 pub fn commit_user_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
 	let round = make_round(channel.user_type, channel.round_operations.clone());
-	channel.signed_rounds.push((round, signature));
+	channel.signed_rounds.push((round.as_slice().to_vec(), signature.serialize()));
 	channel.round_operations = vec![];
 }
 
 pub fn commit_opponent_round(signature: Signature) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
 	let round = make_round(channel.opponent_type, channel.round_operations.clone());
-	channel.signed_rounds.push((round, signature));
+	channel.signed_rounds.push((round.as_slice().to_vec(), signature.serialize()));
 	channel.round_operations = vec![];
 }
 
@@ -149,6 +155,43 @@ pub fn commit_user_operation(operation: String) {
 pub fn commit_opponent_operation(operation: String) {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
 	channel.round_operations.push(operation);
+}
+
+pub fn get_kabletop_signed_rounds() -> Result<Vec<(Round, Signature)>, String> {
+	get_clone()
+		.signed_rounds
+		.into_iter()
+		.map(|(round, signature)| {
+			match Round::from_slice(round.as_slice()) {
+				Ok(round) => match Signature::from_slice(signature.as_slice()) {
+					Ok(signature) => Ok((round, signature)),
+					Err(error)    => Err(error.to_string())
+				},
+				Err(error) => Err(error.to_string())
+			}
+		})
+		.collect::<Result<Vec<_>, _>>()
+}
+
+pub fn get_kabletop_args() -> Result<Args, String> {
+	Ok(Args::from_slice(&get_clone().script_args).map_err(|err| err.to_string())?)
+}
+
+pub fn persist(name: String) -> Result<(), String> {
+	let path = format!("db/{}.json", name);
+	let content = serde_json::to_string_pretty(&get_clone()).map_err(|err| err.to_string())?;
+	std::fs::write(path, content).map_err(|err| err.to_string())?;
+	Ok(())
+}
+
+pub fn recover(name: String) -> Result<ChannelCache, String> {
+	let path = format!("db/{}.json", name);
+	let content = std::fs::read_to_string(path.clone())
+		.map_err(|err| format!("{} => {}", err, path))?;
+	let channel: ChannelCache = serde_json::from_str(content.as_str())
+		.map_err(|err| err.to_string())?;
+	*CHANNEL_CACHE.lock().unwrap() = channel;
+	Ok(get_clone())
 }
 
 pub fn get_clone() -> ChannelCache {
