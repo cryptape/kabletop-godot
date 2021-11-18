@@ -1,17 +1,13 @@
-use kabletop_ckb_sdk::{
-	config::VARS, ckb::{
-		wallet::keystore, rpc::{
-			types::{
-				SearchKey, ScriptType
-			}, methods::{
-				send_transaction, get_transaction, get_live_nfts, get_live_cells
-			}
-		}, transaction::{
-			builder::*, helper::*, channel::{
-				interact as channel, protocol::{
-					Round, Challenge
-				}
-			}
+use kabletop_ckb_sdk::ckb::{
+	wallet::keystore, rpc::{
+		types::{
+			SearchKey, ScriptType
+		}, methods::{
+			send_transaction, get_transaction, get_live_nfts, get_live_cells
+		}
+	}, transaction::{
+		builder::*, helper::*, channel::protocol::{
+			Round, Challenge
 		}
 	}
 };
@@ -223,36 +219,32 @@ where
 
 // challenge specified kabletop channel on-chain
 pub fn challenge_kabletop_channel<F>(
-	script_args: Vec<u8>, challenger: u8, operations: Vec<String>, mut signed_rounds: Vec<(Round, Signature)>, f: F
+	script_args: Vec<u8>, challenger: u8, operations: Vec<String>, signed_rounds: Vec<(Round, Signature)>, f: F
 ) where
 	F: Fn(Result<H256, String>) + Send + 'static
 {
-	thread::spawn(move || {
-		match block_on(get_kabletop_challenge_data(script_args.clone())) {
-			Ok((true, data)) => {
-				if let Some(data) = data {
-					let last_challenger: u8 = data.challenger().into();
-					if last_challenger == challenger {
-						return f(Err(String::from("dumplicate challenge")))
-					}
-					let last_operations = Vec::from(data.operations())
-						.into_iter()
-						.map(|bytes| String::from_utf8(bytes).unwrap())
-						.collect::<Vec<_>>();
-					let last_round = channel::make_round(last_challenger, last_operations);
-					let script_hash = kabletop_script(script_args.clone()).calc_script_hash();
-					let signature = channel::sign_channel_round(
-						script_hash, signed_rounds.clone(), last_round.clone(), &VARS.common.user_key.privkey
-					);
-					if let Err(error) = signature {
-						return f(Err(error.to_string()))
-					}
-					signed_rounds.push((last_round, signature.unwrap()));
+	// for debug
+	println!("\n===========================\nprinting operations:");
+	signed_rounds
+		.iter()
+		.enumerate()
+		.for_each(|(i, (round, _))| {
+			println!("=> round {} for user {} <=", i + 1, u8::from(round.user_type()));
+			let operations: Vec<String> = {
+				let operations: Vec<Vec<u8>> = round.operations().into();
+				match operations.into_iter().map(|v| String::from_utf8(v)).collect::<Result<Vec<_>, _>>() {
+					Ok(value) => value,
+					Err(_)    => return
 				}
-			},
-			Ok((false, _)) => return f(Err(String::from("invalid script_args, can't find valid kabletop cell"))),
-			Err(err)       => return f(Err(err)) 
-		};
+			};
+			for code in operations {
+				println!("{}", code);
+			}
+		});
+	println!("===========================\n");
+	// debug end
+
+	thread::spawn(move || {
 		match block_on(build_tx_challenge_channel(script_args, challenger, operations.into(), signed_rounds)) {
 			Ok(tx) => {
 				// write tx to file for debug
@@ -271,38 +263,32 @@ pub fn challenge_kabletop_channel<F>(
 }
 
 pub fn close_challenged_kabletop_channel<F>(
-	script_args: Vec<u8>, challenger: u8, winner: u8, mut signed_rounds: Vec<(Round, Signature)>, f: F
+	script_args: Vec<u8>, winner: u8, from_challenge: bool, signed_rounds: Vec<(Round, Signature)>, f: F
 ) where
 	F: Fn(Result<H256, String>) + Send + 'static
 {
-	thread::spawn(move || {
-		let mut from_challenge = true;
-		match block_on(get_kabletop_challenge_data(script_args.clone())) {
-			Ok((true, data)) => {
-				if let Some(data) = data {
-					let last_challenger: u8 = data.challenger().into();
-					if last_challenger != challenger {
-						let last_operations = Vec::from(data.operations())
-							.into_iter()
-							.map(|bytes| String::from_utf8(bytes).unwrap())
-							.collect::<Vec<_>>();
-						let last_round = channel::make_round(last_challenger, last_operations);
-						let script_hash = kabletop_script(script_args.clone()).calc_script_hash();
-						let signature = channel::sign_channel_round(
-							script_hash, signed_rounds.clone(), last_round.clone(), &VARS.common.user_key.privkey
-						);
-						if let Err(error) = signature {
-							return f(Err(error.to_string()))
-						}
-						signed_rounds.push((last_round, signature.unwrap()));
-					}
-				} else {
-					from_challenge = false;
+	// for debug
+	println!("\n===========================\nprinting operations:");
+	signed_rounds
+		.iter()
+		.enumerate()
+		.for_each(|(i, (round, _))| {
+			println!("=> round {} for user {} <=", i + 1, u8::from(round.user_type()));
+			let operations: Vec<String> = {
+				let operations: Vec<Vec<u8>> = round.operations().into();
+				match operations.into_iter().map(|v| String::from_utf8(v)).collect::<Result<Vec<_>, _>>() {
+					Ok(value) => value,
+					Err(_)    => return
 				}
-			},
-			Ok((false, _)) => return f(Err(String::from("invalid script_args, can't find valid kabletop cell"))),
-			Err(err)       => return f(Err(err.to_string()))
-		}
+			};
+			for code in operations {
+				println!("{}", code);
+			}
+		});
+	println!("===========================\n");
+	// debug end
+
+	thread::spawn(move || {
 		match block_on(build_tx_close_channel(script_args, signed_rounds, winner, from_challenge)) {
 			Ok(tx) => {
 				// write tx to file for debug

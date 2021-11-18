@@ -2,6 +2,7 @@ use gdnative::prelude::*;
 use gdnative::api::*;
 use futures::executor::block_on;
 use molecule::prelude::Entity;
+use ckb_crypto::secp::Signature;
 use kabletop_godot_sdk::{
 	lua::highlevel::Lua, cache, lua, ckb::*, p2p::{
 		client, server, protocol::types::GodotType, protocol_relay::types::ClientInfo
@@ -10,7 +11,11 @@ use kabletop_godot_sdk::{
 use kabletop_ckb_sdk::{
 	config::VARS, ckb::{
 		rpc::methods::get_tip_block_number, transaction::{
-			helper::privkey_to_pkhash, channel::protocol::Challenge
+			helper::*, channel::{
+				interact as channel, protocol::{
+					Challenge, Round
+				}
+			}
 		} 
 	}
 };
@@ -235,6 +240,51 @@ pub fn remove_kabletop_cache(script_hash: String) -> bool {
 	}
 }
 
+pub fn complete_signed_rounds_for_challenge() -> Result<(Vec<(Round, Signature)>, bool), String> {
+	let store = cache::get_clone();
+	match block_on(get_kabletop_challenge_data(store.script_args.clone())) {
+		Ok((true, data)) => {
+			let mut challenging = false;
+			if let Some(data) = data {
+				if u8::from(data.challenger()) == store.user_type {
+					return Err(String::from("dumplicate challenge"))
+				}
+				// the signature which matches challenger operations of last challenge transaction can be
+				// found in current challenge data, so extract it and complete the rounds data
+				if !store.round_operations.is_empty() {
+					cache::commit_user_round(data.snapshot_signature().into());
+				}
+				// make new round for pending operations of user who had been challenged
+				let opponent_operations = Vec::from(data.operations())
+					.into_iter()
+					.map(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
+					.collect::<Result<Vec<_>, _>>()?
+					.into_iter()
+					.map(|operation| {
+						cache::commit_opponent_operation(operation.clone());
+						operation
+					})
+					.collect::<Vec<_>>();
+				if !opponent_operations.is_empty() {
+					let opponent_round = channel::make_round(store.opponent_type, opponent_operations);
+					let script_hash = kabletop_script(store.script_args).calc_script_hash();
+					let signature = channel::sign_channel_round(
+						script_hash, cache::get_kabletop_signed_rounds()?, opponent_round, &VARS.common.user_key.privkey
+					);
+					if let Err(error) = signature {
+						return Err(error.to_string())
+					}
+					cache::commit_opponent_round(signature.unwrap());
+				}
+				challenging = true;
+			}
+			Ok((cache::get_kabletop_signed_rounds()?, challenging))
+		},
+		Ok((false, _)) => Err(String::from("invalid script_args, can't find valid kabletop cell")),
+		Err(err)       => Err(err)
+	}
+}
+
 pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
 	let db = std::fs::read_dir("db").map_err(|err| err.to_string())?;
 	let tipnumber = get_tip_block_number().map_err(|err| err.to_string())?;
@@ -276,9 +326,16 @@ pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
 		} else {
 			continue
 		}
+		let round_count = {
+			if !store.round_operations.is_empty() {
+				signed_rounds.len() + 1
+			} else {
+				signed_rounds.len()
+			}
+		};
 		let blocknumber: u64 = lock_args.begin_blocknumber().into();
 		let countdown = {
-			let mut round_count = signed_rounds.len() as u64;
+			let mut round_count = round_count as u64;
 			if signed_rounds.len() > 30 {
 				round_count = 30;
 			} else if signed_rounds.len() < 5 {
@@ -290,7 +347,7 @@ pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
 		challenge.insert("script_hash", hex::encode(store.script_hash));
 		challenge.insert("staking_ckb", store.staking_ckb / 100_000_000);
 		challenge.insert("bet_ckb", store.bet_ckb / 100_000_000);
-		challenge.insert("round_count", signed_rounds.len());
+		challenge.insert("round_count", round_count);
 		challenge.insert("block_countdown", countdown);
 		values.push((challenge, get_kabletop_challenge_data(lock_args.as_slice().to_vec())));
 	}
@@ -310,9 +367,14 @@ pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
 						Err(_)    => return None
 					}
 				};
+				if value.get("user_type").to_u64() != challenger as u64 {
+					let round_count = value.get("round_count").to_u64();
+					value.insert("round_count", round_count + 1);
+				}
 				value.insert("operations", operations);
 				value.insert("challenger", challenger);
 			} else {
+				remove_kabletop_cache(value.get("script_hash").to_string());
 				return None
 			}
 			Some(value.into_shared())
@@ -331,7 +393,18 @@ pub fn replay_kabletop_cache(script_hash: String) -> Result<(), String> {
 	}
 	let store = cache::recover(script_hash)?;
 	let lock_args = cache::get_kabletop_args()?;
-	let signed_rounds = cache::get_kabletop_signed_rounds()?;
+	let signed_rounds = {
+		let mut cached_rounds = cache::get_kabletop_signed_rounds()?;
+		if !store.round_operations.is_empty() {
+			if let (true, Some(data)) = block_on(get_kabletop_challenge_data(lock_args.as_slice().to_vec()))? {
+				if u8::from(data.challenger()) != store.user_type {
+					let uncomplete_round = channel::make_round(store.user_type, store.round_operations);
+					cached_rounds.push((uncomplete_round, data.snapshot_signature().into()));
+				}
+			}
+		}
+		cached_rounds
+	};
 	let lua = Lua::new(0, 0);
 	lua.inject_nfts(from_nfts(lock_args.user1_nfts().into()), from_nfts(lock_args.user2_nfts().into()));
 	lua.boost(get_lua_entry());

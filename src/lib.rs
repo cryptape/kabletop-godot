@@ -314,7 +314,7 @@ impl Kabletop {
 	#[export]
 	fn connect_to(&self, _owner: &Node, socket: String) -> Variant {
 		let result = client::connect(socket.as_str(), || {
-			unset_lua();
+			// unset_lua();
 			push_event("connect_status", vec!["CLIENT".to_variant(), false.to_variant()]);
 		});
 		if let Err(err) = result {
@@ -339,7 +339,7 @@ impl Kabletop {
 				server::set_client_receivers(id, receivers);
 				push_event("connect_status", vec!["SERVER".to_variant(), true.to_variant()]);
 			} else {
-				unset_lua();
+				// unset_lua();
 				push_event("connect_status", vec!["SERVER".to_variant(), false.to_variant()]);
 			}
 		});
@@ -392,14 +392,20 @@ impl Kabletop {
 		let store = cache::get_clone();
 		thread::spawn(move || {
 			if from_challenge {
-				let signed_rounds = cache::get_kabletop_signed_rounds().unwrap();
 				let winner = match store.winner {
 					0 => store.user_type,
 					_ => store.winner
 				};
+				let (signed_rounds, from_challenge) = match complete_signed_rounds_for_challenge() {
+					Ok(value) => value,
+					Err(err)  => {
+						FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_variant()]));
+						return
+					}
+				};
 				let script_hash = store.script_hash;
 				close_challenged_kabletop_channel(
-					store.script_args, store.user_type, winner, signed_rounds, handle_transaction(move || {
+					store.script_args, winner, from_challenge, signed_rounds, handle_transaction(move || {
 						remove_kabletop_cache(hex::encode(script_hash));
 					}, callback)
 				)
@@ -419,12 +425,24 @@ impl Kabletop {
 
 	#[export]
 	fn challenge_channel(&self, _: &Node, script_hash: String, callback: Ref<FuncRef>) {
-		match cache::recover(script_hash) {
+		persist_kabletop_cache();
+		match cache::recover(script_hash.clone()) {
 			Ok(store) => {
-				let signed_rounds = cache::get_kabletop_signed_rounds().unwrap();
-				let codes = dump_cached_codes(false);
+				let signed_rounds = match complete_signed_rounds_for_challenge() {
+					Ok((rounds, _)) => rounds,
+					Err(err) => {
+						FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_variant()]));
+						return
+					}
+				};
 				challenge_kabletop_channel(
-					store.script_args, store.user_type, codes, signed_rounds, handle_transaction(|| {}, callback)
+					store.script_args, store.user_type, dump_cached_codes(false), signed_rounds, handle_transaction(|| {
+						dump_cached_codes(true)
+							.into_iter()
+							.for_each(|code| cache::commit_user_operation(code));
+						persist_kabletop_cache();
+						remove_cached_codes();
+					}, callback)
 				);
 			},
 			Err(err) => {
