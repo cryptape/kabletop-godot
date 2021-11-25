@@ -223,27 +223,6 @@ pub fn challenge_kabletop_channel<F>(
 ) where
 	F: Fn(Result<H256, String>) + Send + 'static
 {
-	// for debug
-	println!("\n===========================\nprinting operations:");
-	signed_rounds
-		.iter()
-		.enumerate()
-		.for_each(|(i, (round, _))| {
-			println!("=> round {} for user {} <=", i + 1, u8::from(round.user_type()));
-			let operations: Vec<String> = {
-				let operations: Vec<Vec<u8>> = round.operations().into();
-				match operations.into_iter().map(|v| String::from_utf8(v)).collect::<Result<Vec<_>, _>>() {
-					Ok(value) => value,
-					Err(_)    => return
-				}
-			};
-			for code in operations {
-				println!("{}", code);
-			}
-		});
-	println!("===========================\n");
-	// debug end
-
 	thread::spawn(move || {
 		match block_on(build_tx_challenge_channel(script_args, challenger, operations.into(), signed_rounds)) {
 			Ok(tx) => {
@@ -267,26 +246,26 @@ pub fn close_challenged_kabletop_channel<F>(
 ) where
 	F: Fn(Result<H256, String>) + Send + 'static
 {
-	// for debug
-	println!("\n===========================\nprinting operations:");
-	signed_rounds
-		.iter()
-		.enumerate()
-		.for_each(|(i, (round, _))| {
-			println!("=> round {} for user {} <=", i + 1, u8::from(round.user_type()));
-			let operations: Vec<String> = {
-				let operations: Vec<Vec<u8>> = round.operations().into();
-				match operations.into_iter().map(|v| String::from_utf8(v)).collect::<Result<Vec<_>, _>>() {
-					Ok(value) => value,
-					Err(_)    => return
-				}
-			};
-			for code in operations {
-				println!("{}", code);
-			}
-		});
-	println!("===========================\n");
-	// debug end
+	// // for debug
+	// println!("\n===========================\nprinting operations:");
+	// signed_rounds
+	// 	.iter()
+	// 	.enumerate()
+	// 	.for_each(|(i, (round, _))| {
+	// 		println!("=> round {} for user {} <=", i + 1, u8::from(round.user_type()));
+	// 		let operations: Vec<String> = {
+	// 			let operations: Vec<Vec<u8>> = round.operations().into();
+	// 			match operations.into_iter().map(|v| String::from_utf8(v)).collect::<Result<Vec<_>, _>>() {
+	// 				Ok(value) => value,
+	// 				Err(_)    => return
+	// 			}
+	// 		};
+	// 		for code in operations {
+	// 			println!("{}", code);
+	// 		}
+	// 	});
+	// println!("===========================\n");
+	// // debug end
 
 	thread::spawn(move || {
 		match block_on(build_tx_close_channel(script_args, signed_rounds, winner, from_challenge)) {

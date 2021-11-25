@@ -334,21 +334,12 @@ pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
 			}
 		};
 		let blocknumber: u64 = lock_args.begin_blocknumber().into();
-		let countdown = {
-			let mut round_count = round_count as u64;
-			if signed_rounds.len() > 30 {
-				round_count = 30;
-			} else if signed_rounds.len() < 5 {
-				round_count = 5;
-			}
-			let targetnumber = blocknumber + round_count * round_count;
-			std::cmp::max(targetnumber, tipnumber) - tipnumber
-		};
 		challenge.insert("script_hash", hex::encode(store.script_hash));
 		challenge.insert("staking_ckb", store.staking_ckb / 100_000_000);
 		challenge.insert("bet_ckb", store.bet_ckb / 100_000_000);
 		challenge.insert("round_count", round_count);
-		challenge.insert("block_countdown", countdown);
+		challenge.insert("begin_blocknumber", blocknumber);
+		challenge.insert("tip_blocknumber", tipnumber);
 		values.push((challenge, get_kabletop_challenge_data(lock_args.as_slice().to_vec())));
 	}
 	let values = values
@@ -373,6 +364,13 @@ pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
 				}
 				value.insert("operations", operations);
 				value.insert("challenger", challenger);
+				value.insert("block_countdown", {
+					let count: u8 = challenge.count().into();
+					let round = value.get("round_count").to_u64();
+					let begin = value.get("begin_blocknumber").to_u64();
+					let tip   = value.get("tip_blocknumber").to_u64();
+					std::cmp::max(begin + count as u64 * 125 + round * 30, tip) - tip
+				});
 			} else {
 				remove_kabletop_cache(value.get("script_hash").to_string());
 				return None
