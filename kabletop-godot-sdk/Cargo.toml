@@ -8,8 +8,8 @@ edition = "2018"
 
 [dependencies]
 gdnative = "0.9.0"
-# kabletop-ckb-sdk = { git = "https://github.com/ashuralyk/kabletop-ckb-sdk" }
-kabletop-ckb-sdk = { path = "../../kabletop-ckb-sdk" }
+kabletop-ckb-sdk = { git = "https://github.com/ashuralyk/kabletop-ckb-sdk" }
+# kabletop-ckb-sdk = { path = "../../kabletop-ckb-sdk" }
 futures = "0.3.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
