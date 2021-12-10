@@ -85,11 +85,11 @@ pub mod send {
         // let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
         // std::fs::write("open_kabletop_channel.json", json).expect("write json file");
 
-		let hash = ckb::send_transaction(tx.data())
-			.map_err(|err| format!("send_transaction -> {}", err))?;
-		if !check_transaction_committed_or_not(&hash) {
-			return Err(String::from("send_transaction successed, but no committed transaction found in CKB network in 100s"));
-		}
+		// let hash = ckb::send_transaction(tx.data())
+		// 	.map_err(|err| format!("send_transaction -> {}", err))?;
+		// if !check_transaction_committed_or_not(&hash) {
+		// 	return Err(String::from("send_transaction successed, but no committed transaction found in CKB network in 100s"));
+		// }
 		let value: response::OpenChannel = caller.call(
 			"open_kabletop_channel", request::SignAndSubmitChannel {
 				tx: tx.clone().into()
@@ -299,7 +299,7 @@ pub mod reply {
 			let value: request::SignAndSubmitChannel = from_value(value)
 				.map_err(|err| format!("deserialize open_kabletop_channel -> {}", err))?;
 			let hash = value.tx.hash;
-			let ok = check_transaction_committed_or_not(&hash);
+			let ok = true;//check_transaction_committed_or_not(&hash);
 			trigger_hook("open_kabletop_channel", hash.as_bytes().to_vec());
 			Ok(json!(response::OpenChannel {
 				result: ok

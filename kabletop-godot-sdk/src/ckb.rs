@@ -3,7 +3,7 @@ use kabletop_ckb_sdk::ckb::{
 		types::{
 			SearchKey, ScriptType
 		}, methods::{
-			send_transaction, get_transaction, get_live_nfts, get_live_cells
+			send_transaction, get_transaction, get_live_nfts, get_live_cells, get_total_capacity
 		}
 	}, transaction::{
 		builder::*, helper::*, channel::protocol::{
@@ -58,6 +58,14 @@ pub fn wallet_status() -> Result<(u8, bool), String> {
 			None         => Ok((0, true))
 		}
 	}
+}
+
+// get user total capacity on ckb network
+pub fn online_capacity() -> Result<u64, String> {
+	let capacity = block_on(get_total_capacity(keystore::USER_PUBHASH.to_vec()))
+		.map_err(|err| err.to_string())?
+		.capacity;
+	Ok(capacity.as_u64())
 }
 
 // push transaction to ckb network through rpc handler

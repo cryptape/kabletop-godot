@@ -190,7 +190,17 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn set_nfts(&mut self, _owner: &Node, nfts: Dictionary) {
+	fn set_round(&self, _owner: &Node, round: u8, actor: u8) {
+		cache::set_round_status(round, actor);
+	}
+
+	#[export]
+	fn get_ckb(&mut self, _owner: &Node) -> u64 {
+		online_capacity().unwrap()
+	}
+
+	#[export]
+	fn set_selected_nfts(&mut self, _owner: &Node, nfts: Dictionary) {
 		self.nfts = nfts
 			.iter()
 			.map(|(nft, count)| vec![nft.to_string(); count.to_u64() as usize])
@@ -199,17 +209,12 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn set_round(&self, _owner: &Node, round: u8, actor: u8) {
-		cache::set_round_status(round, actor);
-	}
-
-	#[export]
-	fn get_nfts(&self, _owner: &Node) -> Dictionary {
+	fn get_selected_nfts(&self, _owner: &Node) -> Dictionary {
 		into_dictionary(&self.nfts)
 	}
 
 	#[export]
-	fn get_nfts_count(&self, _owner: &Node, player_id: u8) -> usize {
+	fn get_selected_nfts_count(&self, _owner: &Node, player_id: u8) -> usize {
 		let store = cache::get_clone();
 		if player_id > 0 {
 			if player_id == store.user_type {
@@ -356,12 +361,12 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn create_channel(&self, _owner: &Node, staking_ckb: u64, bet_ckb: u64, callback: Ref<FuncRef>) -> Variant {
+	fn create_channel(&self, _owner: &Node, staking_ckb: u64, bet_ckb: u64, callback: Ref<FuncRef>) {
 		if self.nfts.len() == 0 {
-			return "empty nfts".to_variant();
+			FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), "empty nfts".to_variant()]));
 		}
 		if get_p2p_mode() != P2pMode::Client {
-			return "no client mode".to_variant();
+			FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), "no client mode".to_variant()]));
 		}
 		cache::init(cache::PLAYER_TYPE::ONE);
 		cache::set_staking_and_bet_ckb(staking_ckb, bet_ckb);
@@ -384,7 +389,6 @@ impl Kabletop {
 				FUNCREFS.lock().unwrap().push((callback.clone(), vec![false.to_variant(), err.to_variant()]));
 			}
 		});
-		Variant::default()
 	}
 
 	#[export]
