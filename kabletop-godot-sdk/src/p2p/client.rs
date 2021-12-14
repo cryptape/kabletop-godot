@@ -21,7 +21,10 @@ lazy_static! {
 }
 
 // try to enstablish connection between client and server
-pub fn connect<F: Fn() + Send + 'static>(socket: &str, callback: F) -> Result<(), String> {
+pub fn connect<F>(socket: &str, callback: F) -> Result<(), String>
+where
+	F: Fn() + Send + Sync + 'static
+{
 	let client = Client::new(socket)
 		// for native connections
 		.register("switch_round", reply::switch_round)
