@@ -7,7 +7,7 @@ use crate::p2p::protocol::{
 	}
 };
 use std::{
-	sync::Mutex, collections::HashMap, sync::mpsc::Receiver
+	sync::Mutex, collections::HashMap
 };
 
 lazy_static! {
@@ -17,7 +17,7 @@ lazy_static! {
 // start p2p server and listen connections
 pub fn listen<F>(socket: &str, callback: F) -> Result<(), String>
 where
-	F: Fn(i32, Option<HashMap<String, Receiver<String>>>) + Send + Sync + 'static
+	F: Fn(i32, bool) + Send + Sync + 'static
 {
 	let server = Server::new(socket)
 		.register("prepare_kabletop_channel", reply::prepare_kabletop_channel)
@@ -48,10 +48,6 @@ pub fn disconnect() {
 
 pub fn change_client(client_id: i32) {
 	SERVER.lock().unwrap().as_mut().unwrap().set_id(client_id);
-}
-
-pub fn set_client_receivers(client_id: i32, receivers: HashMap<String, Receiver<String>>) {
-	SERVER.lock().unwrap().as_mut().unwrap().append_receivers(client_id, receivers);
 }
 
 pub fn close_kabletop_channel() -> Result<[u8; 32], String> {

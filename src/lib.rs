@@ -338,10 +338,9 @@ impl Kabletop {
 		cache::init(cache::PLAYER_TYPE::TWO);
 		cache::set_staking_and_bet_ckb(staking_ckb, bet_ckb);
 		cache::set_playing_nfts(into_nfts(self.nfts.clone()));
-		let result = server::listen(socket.as_str(), move |id, connected_receivers| {
-			if let Some(receivers) = connected_receivers {
+		let result = server::listen(socket.as_str(), move |id, connected| {
+			if connected {
 				server::change_client(id);
-				server::set_client_receivers(id, receivers);
 				push_event("connect_status", vec!["SERVER".to_variant(), true.to_variant()]);
 			} else {
 				// unset_lua();
