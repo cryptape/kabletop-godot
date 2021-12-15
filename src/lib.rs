@@ -462,7 +462,7 @@ impl Kabletop {
 	#[export]
 	fn close_game(&self, _owner: &Node, winner: u8, from_challenge: bool, callback: Ref<FuncRef>) {
 		cache::set_winner(winner);
-		if !from_challenge {
+		if cache::get_clone().user_type == winner && !from_challenge {
 			thread::spawn(move || {
 				if let Err(error) = notify_game_over() {
 					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
