@@ -41,21 +41,18 @@ pub mod request {
 	// round owner requests to end current round with all of operations made from it
 	#[derive(Serialize, Deserialize)]
 	pub struct CloseRound {
-		pub round:      u8,
 		pub operations: Vec<String>
 	}
 
 	// sender tells opposite that the game has reached to the end which hp from one of players is down to zero
 	#[derive(Serialize, Deserialize)]
 	pub struct CloseGame {
-		pub round:      u8,
 		pub operations: Vec<String>
 	}
 
 	// round owner syncs round operation
 	#[derive(Serialize, Deserialize)]
 	pub struct PushOperation {
-		pub round:     u8,
 		pub operation: String
 	}
 
@@ -92,7 +89,6 @@ pub mod response {
 	// accept the request of ending round and switch the round owner
 	#[derive(Serialize, Deserialize)]
 	pub struct OpenRound {
-		pub round:     u8,
 		pub signature: JsonBytes
 	}
 

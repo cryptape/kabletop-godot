@@ -159,7 +159,7 @@ impl Kabletop {
         godot_print!("welcome to the kabletop world!");
 		set_godot_emitor(owner.claim());
 		// update_owned_nfts();
-		update_box_status();
+		// update_box_status();
     }
 
 	#[export]
@@ -187,11 +187,6 @@ impl Kabletop {
 	#[export]
 	fn set_entry(&mut self, _owner: &Node, entry: String) {
 		set_lua_entry(entry);
-	}
-
-	#[export]
-	fn set_round(&self, _owner: &Node, round: u8, actor: u8) {
-		cache::set_round_status(round, actor);
 	}
 
 	#[export]
@@ -308,8 +303,6 @@ impl Kabletop {
 		value.insert("user_pkhash", hex::encode(clone.user_pkhash));
 		value.insert("opponent_pkhash", hex::encode(clone.opponent_pkhash));
 		value.insert("winner", clone.winner);
-		value.insert("round", clone.round);
-		value.insert("round_owner", clone.round_owner);
 		value.insert("user_type", clone.user_type);
 		value.insert("opponent_type", clone.opponent_type);
 		value.insert("round_operations", clone.round_operations);
@@ -469,8 +462,7 @@ impl Kabletop {
 	#[export]
 	fn close_game(&self, _owner: &Node, winner: u8, from_challenge: bool, callback: Ref<FuncRef>) {
 		cache::set_winner(winner);
-		let store = cache::get_clone();
-		if store.round_owner == store.user_type && !from_challenge {
+		if !from_challenge {
 			thread::spawn(move || {
 				if let Err(error) = notify_game_over() {
 					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));

@@ -40,8 +40,6 @@ pub struct ChannelCache {
 
 	// for kabletop round
 	pub winner:           u8,
-	pub round:            u8,
-	pub round_owner:      u8,
 	pub user_type:        u8,
 	pub opponent_type:    u8,
 	pub round_operations: Vec<String>,
@@ -51,8 +49,8 @@ pub struct ChannelCache {
 impl Default for ChannelCache {
 	fn default() -> Self {
 		ChannelCache {
-			staking_ckb:      str_to_capacity("300").as_u64(),
-			bet_ckb:          str_to_capacity("100").as_u64(),
+			staking_ckb:      str_to_capacity("600").as_u64(),
+			bet_ckb:          str_to_capacity("300").as_u64(),
 			script_hash:      [0u8; 32],
 			script_args:      vec![],
 			channel_hash:     [0u8; 32],
@@ -63,8 +61,6 @@ impl Default for ChannelCache {
 			user_pkhash:      VARS.common.user_key.pubhash.clone(),
 			opponent_pkhash:  [0u8; 20],
 			winner:           0,
-			round:            0,
-			round_owner:      0,
 			user_type:        0,
 			opponent_type:    0,
 			round_operations: vec![],
@@ -91,12 +87,6 @@ pub fn init(player_type: PLAYER_TYPE) {
 pub fn clear() {
 	let mut channel = CHANNEL_CACHE.lock().unwrap();
 	*channel = ChannelCache::default();
-}
-
-pub fn set_round_status(count: u8, owner: u8) {
-	let mut channel = CHANNEL_CACHE.lock().unwrap();
-	channel.round = count;
-	channel.round_owner = owner;
 }
 
 pub fn set_staking_and_bet_ckb(staking: u64, bet: u64) {

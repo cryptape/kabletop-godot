@@ -81,15 +81,15 @@ pub mod send {
 		).map_err(|err| format!("sign_channel_tx -> {}", err))?;
 
 		// write tx to file for debug
-        // let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
-        // let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
-        // std::fs::write("open_kabletop_channel.json", json).expect("write json file");
+        let json_tx = ckb_jsonrpc_types::TransactionView::from(tx.clone());
+        let json = serde_json::to_string_pretty(&json_tx).expect("jsonify");
+        std::fs::write("open_kabletop_channel.json", json).expect("write json file");
 
-		// let hash = ckb::send_transaction(tx.data())
-		// 	.map_err(|err| format!("send_transaction -> {}", err))?;
-		// if !check_transaction_committed_or_not(&hash) {
-		// 	return Err(String::from("send_transaction successed, but no committed transaction found in CKB network in 100s"));
-		// }
+		let hash = ckb::send_transaction(tx.data())
+			.map_err(|err| format!("send_transaction -> {}", err))?;
+		if !check_transaction_committed_or_not(&hash) {
+			return Err(String::from("send_transaction successed, but no committed transaction found in CKB network in 100s"));
+		}
 		let value: response::OpenChannel = caller.call(
 			"open_kabletop_channel", request::SignAndSubmitChannel {
 				tx: tx.clone().into()
@@ -143,7 +143,6 @@ pub mod send {
 		let store = cache::get_clone();
 		let value: response::CloseGame = caller.call(
 			"notify_game_over", request::CloseGame {
-				round:      store.round,
 				operations: store.round_operations.clone()
 			}).map_err(|err| format!("CloseGame -> {}", err))?;
 		if !value.result {
@@ -166,12 +165,8 @@ pub mod send {
 		let store = cache::get_clone();
 		let value: response::OpenRound = caller.call(
 			"switch_round", request::CloseRound {
-				round:      store.round,
 				operations: store.round_operations.clone()
 			}).map_err(|err| format!("CloseRound -> {}", err))?;
-		if value.round != store.round {
-			return Err(format!("opposite round count({}) mismatched native round count({})", value.round, store.round));
-		}
 		let signature = Signature::from_slice(value.signature.as_bytes())
 			.map_err(|err| format!("into_signature -> {}", err))?;
 		let mut signed_rounds = cache::get_kabletop_signed_rounds()?;
@@ -186,10 +181,8 @@ pub mod send {
 
 	// synchronize operations in current round
 	pub fn sync_operation<T: Caller>(caller: &T, operation: String) -> Result<(), String> {
-		let store = cache::get_clone();
 		let value: response::ApplyOperation = caller.call(
 			"sync_operation", request::PushOperation {
-				round:     store.round,
 				operation: operation.clone()
 			}).map_err(|err| format!("PushOperation -> {}", err))?;
 		if value.result {
@@ -299,7 +292,7 @@ pub mod reply {
 			let value: request::SignAndSubmitChannel = from_value(value)
 				.map_err(|err| format!("deserialize open_kabletop_channel -> {}", err))?;
 			let hash = value.tx.hash;
-			let ok = true;//check_transaction_committed_or_not(&hash);
+			let ok = check_transaction_committed_or_not(&hash);
 			trigger_hook("open_kabletop_channel", hash.as_bytes().to_vec());
 			Ok(json!(response::OpenChannel {
 				result: ok
@@ -330,9 +323,7 @@ pub mod reply {
 			let value: request::CloseGame = from_value(value)
 				.map_err(|err| format!("deserialize verify_game_over -> {}", err))?;
 			let mut store = cache::get_clone();
-			if value.round != store.round {
-				return Err(format!("opposite round #{} exceeds native round #{}", value.round, store.round));
-			} else if value.operations != store.round_operations {
+			if value.operations != store.round_operations {
 				return Err(String::from("opposite and native operations are mismatched"));
 			} else if store.winner == 0 {
 				let mut ok = false;
@@ -370,9 +361,7 @@ pub mod reply {
 			let value: request::CloseRound = from_value(value)
 				.map_err(|err| format!("deserialize switch_round -> {}", err))?;
 			let store = cache::get_clone();
-			if value.round != store.round {
-				return Err(format!("opposite round #{} exceeds native round #{}", value.round, store.round));
-			} else if value.operations != store.round_operations {
+			if value.operations != store.round_operations {
 				return Err(String::from("opposite and native operations are mismatched"));
 			}
 			let next_round = channel::make_round(store.opponent_type, store.round_operations);
@@ -385,7 +374,6 @@ pub mod reply {
 			cache::commit_opponent_round(signature.clone());
 			trigger_hook("switch_round", signature.serialize());
 			Ok(json!(response::OpenRound {
-				round:     store.round,
 				signature: signature.serialize().pack().into()
 			}))
 		})
@@ -396,10 +384,6 @@ pub mod reply {
 		Box::pin(async {
 			let value: request::PushOperation = from_value(value)
 				.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
-			let store = cache::get_clone();
-			if value.round != store.round {
-				println!("CAUTION: sync_operation => native #{} and opposite #{} round are mismatched", store.round, value.round);
-			}
 			cache::commit_opponent_operation(value.operation.clone());
 			trigger_hook("sync_operation", value.operation.as_bytes().to_vec());
 			Ok(json!(response::ApplyOperation {
