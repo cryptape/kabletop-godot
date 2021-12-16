@@ -190,6 +190,11 @@ impl Kabletop {
 	}
 
 	#[export]
+	fn set_winner(&mut self, _owner: &Node, winner: u8) {
+		cache::set_winner(winner);
+	}
+
+	#[export]
 	fn get_ckb(&mut self, _owner: &Node) -> u64 {
 		online_capacity().unwrap()
 	}
@@ -460,18 +465,19 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn close_game(&self, _owner: &Node, winner: u8, from_challenge: bool, callback: Ref<FuncRef>) {
-		cache::set_winner(winner);
-		if cache::get_clone().user_type == winner && !from_challenge {
+	fn close_game(&self, _owner: &Node, from_challenge: bool, callback: Ref<FuncRef>) {
+		let store = cache::get_clone();
+		assert!(store.winner != 0, "no winner");
+		if store.user_type == store.winner && !from_challenge {
 			thread::spawn(move || {
 				if let Err(error) = notify_game_over() {
 					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), error.to_variant()]));
 				} else {
-					FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), winner.to_variant()]));
+					FUNCREFS.lock().unwrap().push((callback, vec![true.to_variant(), store.winner.to_variant()]));
 				}
 			});
 		} else {
-			unsafe { callback.assume_safe().call_func(&[true.to_variant(), winner.to_variant()]); }
+			unsafe { callback.assume_safe().call_func(&[true.to_variant(), store.winner.to_variant()]); }
 		}
 	}
 
@@ -485,7 +491,7 @@ impl Kabletop {
 					return
 				}
 			}
-			if terminal {
+			if terminal && cache::get_clone().winner == 0 {
 				match switch_round() {
 					Ok(signature) => {
 						remove_cached_codes();

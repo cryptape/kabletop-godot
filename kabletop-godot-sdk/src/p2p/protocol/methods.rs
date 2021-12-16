@@ -181,15 +181,11 @@ pub mod send {
 
 	// synchronize operations in current round
 	pub fn sync_operation<T: Caller>(caller: &T, operation: String) -> Result<(), String> {
-		let value: response::ApplyOperation = caller.call(
+		cache::commit_user_operation(operation.clone());
+		let _: response::ApplyOperation = caller.call(
 			"sync_operation", request::PushOperation {
-				operation: operation.clone()
+				operation: operation
 			}).map_err(|err| format!("PushOperation -> {}", err))?;
-		if value.result {
-			cache::commit_user_operation(operation);
-		} else {
-			return Err(String::from("opposite REFUSED applying round operation"));
-		}
 		Ok(())
 	}
 
@@ -386,9 +382,7 @@ pub mod reply {
 				.map_err(|err| format!("deserialize PushOperation -> {}", err))?;
 			cache::commit_opponent_operation(value.operation.clone());
 			trigger_hook("sync_operation", value.operation.as_bytes().to_vec());
-			Ok(json!(response::ApplyOperation {
-				result: true
-			}))
+			Ok(json!(response::ApplyOperation {}))
 		})
 	}
 

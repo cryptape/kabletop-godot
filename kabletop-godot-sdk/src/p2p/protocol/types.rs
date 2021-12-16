@@ -101,9 +101,7 @@ pub mod response {
 
 	// response the result of pushing operation in server
 	#[derive(Serialize, Deserialize)]
-	pub struct ApplyOperation {
-		pub result: bool
-	}
+	pub struct ApplyOperation {}
 
 	// reply user-defined message from godot
 	#[derive(Serialize, Deserialize)]
