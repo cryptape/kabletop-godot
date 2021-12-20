@@ -63,8 +63,7 @@ pub fn wallet_status() -> Result<(u8, bool), String> {
 // get user total capacity on ckb network
 pub fn online_capacity() -> Result<u64, String> {
 	let capacity = block_on(get_total_capacity(keystore::USER_PUBHASH.to_vec()))
-		.map_err(|err| err.to_string())?
-		.capacity;
+		.map_err(|err| err.to_string())?;
 	Ok(capacity.as_u64())
 }
 
