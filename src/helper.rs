@@ -246,35 +246,35 @@ pub fn complete_signed_rounds_for_challenge() -> Result<(Vec<(Round, Signature)>
 		Ok((true, data)) => {
 			let mut challenging = false;
 			if let Some(data) = data {
-				if u8::from(data.challenger()) == store.user_type {
-					return Err(String::from("dumplicate challenge"))
-				}
-				// the signature which matches challenger operations of last challenge transaction can be
-				// found in current challenge data, so extract it and complete the rounds data
-				if !store.round_operations.is_empty() {
-					cache::commit_user_round(data.snapshot_signature().into());
-				}
-				// make new round for pending operations of user who had been challenged
-				let opponent_operations = Vec::from(data.operations())
-					.into_iter()
-					.map(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
-					.collect::<Result<Vec<_>, _>>()?
-					.into_iter()
-					.map(|operation| {
-						cache::commit_opponent_operation(operation.clone());
-						operation
-					})
-					.collect::<Vec<_>>();
-				if !opponent_operations.is_empty() {
-					let opponent_round = channel::make_round(store.opponent_type, opponent_operations);
-					let script_hash = kabletop_script(store.script_args).calc_script_hash();
-					let signature = channel::sign_channel_round(
-						script_hash, cache::get_kabletop_signed_rounds()?, opponent_round, &VARS.common.user_key.privkey
-					);
-					if let Err(error) = signature {
-						return Err(error.to_string())
+				// just switch challenger
+				if u8::from(data.challenger()) != store.user_type {
+					// the signature which matches challenger operations of last challenge transaction can be
+					// found in current challenge data, so extract it and complete the rounds data
+					if !store.round_operations.is_empty() {
+						cache::commit_user_round(data.snapshot_signature().into());
 					}
-					cache::commit_opponent_round(signature.unwrap());
+					// make new round for pending operations of user who had been challenged
+					let opponent_operations = Vec::from(data.operations())
+						.into_iter()
+						.map(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
+						.collect::<Result<Vec<_>, _>>()?
+						.into_iter()
+						.map(|operation| {
+							cache::commit_opponent_operation(operation.clone());
+							operation
+						})
+						.collect::<Vec<_>>();
+					if !opponent_operations.is_empty() {
+						let opponent_round = channel::make_round(store.opponent_type, opponent_operations);
+						let script_hash = kabletop_script(store.script_args).calc_script_hash();
+						let signature = channel::sign_channel_round(
+							script_hash, cache::get_kabletop_signed_rounds()?, opponent_round, &VARS.common.user_key.privkey
+						);
+						if let Err(error) = signature {
+							return Err(error.to_string())
+						}
+						cache::commit_opponent_round(signature.unwrap());
+					}
 				}
 				challenging = true;
 			}

@@ -389,8 +389,17 @@ impl Kabletop {
 	}
 
 	#[export]
-	fn close_channel(&self, _owner: &Node, from_challenge: bool, callback: Ref<FuncRef>) {
-		let store = cache::get_clone();
+	fn close_channel(&self, _owner: &Node, from_challenge: bool, script_hash: Option<String>, callback: Ref<FuncRef>) {
+		let store = match script_hash {
+			Some(hash) => match cache::recover(hash) {
+				Ok(value) => value,
+				Err(err)  => {
+					FUNCREFS.lock().unwrap().push((callback, vec![false.to_variant(), err.to_variant()]));
+					return
+				}
+			},
+			None => cache::get_clone()
+		};
 		thread::spawn(move || {
 			if from_challenge {
 				let winner = match store.winner {
