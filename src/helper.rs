@@ -286,7 +286,7 @@ pub fn complete_signed_rounds_for_challenge() -> Result<(Vec<(Round, Signature)>
 }
 
 pub fn scan_uncomplete_kabletop_cache() -> Result<Vec<Dictionary>, String> {
-	let db = std::fs::read_dir("db").map_err(|err| err.to_string())?;
+	let db = std::fs::read_dir("db").map_err(|_| format!("can't open {:?}/db directory", std::env::current_dir()))?;
 	let tipnumber = get_tip_block_number().map_err(|err| err.to_string())?;
 	let mut values = vec![];
 	for path in db {
