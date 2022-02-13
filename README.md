@@ -69,6 +69,3 @@ For example，the demo's gameplay logic is exactly writen in [Lua](https://githu
 `kabletop-godot` has a built-in P2P network module to prevent developers from building their own network module separately. The reason is the process of creating, interacting and closing Kabletop state-channel is complex and requires a lot of CKB development knowledge which is also strongly bound to the network interaction.
 
 Currently, P2P module can only support intranet connection and connection with relay server.
-
-
-Currently, P2P module can only support intranet connection and connection with relay server.
