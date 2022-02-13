@@ -1,12 +1,13 @@
 # Introduction
 
-By integrating the Godot game engine's Rust binding libraries gdnative and kabletop-ckb-sdk to encapsulate the interface for interacting with Kabletop contracts into an interface that the Godot engine can recognize, game developers are able to connect their games to the CKB network with only a small amount of blockchain development experience.
+To encapsulate the interface with Kabletop contracts into an interface recognizable for Godot engine, is by integrating gdnative and `kabletop-ckb-sdk—Godot` game engine's Rust binding libraries. Thus, game developers can connect their games to the CKB network with only a small amount of blockchain development experience.
 
-Godot game engine supports Windows, Linux and MacOS systems, accordingly, kabletop-godot needs to be compiled into a dll, so or dylib file and imported into the Godot engine for use. It is recommended to refer to the official Godot documentation for details on how to import.
+Godot game engine supports Windows, Linux and MacOS systems, accordingly, `kabletop-godot` needs to be compiled into a `.dll`, `.so` or `.dylib` file and imported into the Godot engine. It is recommended to refer to the official Godot documentation for the how-to details.
+
 
 # Godot Interfaces
 
-kabletop-godot provides many types of interfaces for the Godot game engine:
+`kabletop-godot` provides the following types of interfaces for the Godot game engine:
 
 A. Interfaces related to Lua files
 > 1. set_entry
@@ -53,18 +54,21 @@ F. Interfaces related to relay server
 > 4. disconnect_client_via_replay
 > 5. fetch_clients_from_relay
 
-<b>Note: Please refer to the comments in <a href="https://github.com/ashuralyk/kabletop-godot/blob/master/src/lib.rs">lib.rs</a> for the specific usage of the interfaces. In addition, the Kabletop project is still in the development stage, and most of the interfaces may be modified in subsequent releases.</b>
+Note: Please refer to the comments in [lib.rs](https://github.com/ashuralyk/kabletop-godot/blob/master/src/lib.rs) for the specific usage of the interfaces. In addition, the Kabletop project is still in the development stage, and most of the interfaces may be modified in subsequent releases.
 
 # Gameplay writen in Lua
 
-The <a href="https://github.com/ashuralyk/kabletop-godot/tree/master/kabletop-godot-sdk">kabletop-godot-sdk</a> submodule contains a complete Lua virtual machine for executing Lua code. For example, in a two-player game, all processes that have an impact on the outcome of the match need to be written as Lua code, because they need to be referenced into the Kabletop contract to complete the verification of the game logic on the chain, and need to be identical to the local verification logic.
+The [kabletop-godot-sdk](https://github.com/ashuralyk/kabletop-godot/tree/master/kabletop-godot-sdk) submodule contains a complete Lua virtual machine for executing Lua code. For example, in a two-player game, all processes that have an impact on the outcome of the match need to be written in Lua code, because they need to be referenced into the Kabletop contract to complete the verification of the game logic on-chain, and should be identical to the local verification logic.
 
-The kabletop game also needs to run Lua code to complete the gameplay process, so it must get some intermediate state during execution. kabletop-godot does this by listening to a default global variable, exhausting all the events in it after the code execution, and passing them back to the Godot engine through the event callback interface.
+The Kabletop game also needs to run Lua code to complete the gameplay process, so it must have intermediate states during execution. `kabletop-godot` does this by listening to a default global variable, exhausting all the events in it after the code execution, and passing them back to the Godot engine through the event callback interface.
 
-For example，the demo's gameplay logic is exactly writen in <a href="https://github.com/ashuralyk/kabletop-demo/tree/master/lua">Lua</a>.
+For example，the demo's gameplay logic is exactly writen in [Lua](https://github.com/ashuralyk/kabletop-demo/tree/master/lua).
 
 # P2P Network
 
-kabletop-godot has a built-in P2P network module to prevent developers to develop their own network module separately. The reason is the process of creating, interacting and closing kabletop state-channel is complex and requires a lot of CKB development knowledge which is also strongly bound to the network interaction.
+`kabletop-godot` has a built-in P2P network module to prevent developers from building their own network module separately. The reason is the process of creating, interacting and closing Kabletop state-channel is complex and requires a lot of CKB development knowledge which is also strongly bound to the network interaction.
+
+Currently, P2P module can only support intranet connection and connection with relay server.
+
 
 Currently, P2P module can only support intranet connection and connection with relay server.
