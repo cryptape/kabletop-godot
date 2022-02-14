@@ -1,6 +1,6 @@
 # Introduction
 
-To encapsulate the interface with Kabletop contracts into an interface recognizable for Godot engine, is by integrating gdnative and `kabletop-ckb-sdk—Godot` game engine's Rust binding libraries. Thus, game developers can connect their games to the CKB network with only a small amount of blockchain development experience.
+By integrating the Godot game engine's Rust binding library gdnative and `kabletop-ckb-sdk`, the interfaces that interact with the Kabletop contract will be encapsulated into interfaces that the Godot engine can recognize, so that game developers with a small amount of blockchain development experience can connect their games to the CKB network.
 
 Godot game engine supports Windows, Linux and MacOS systems, accordingly, `kabletop-godot` needs to be compiled into a `.dll`, `.so` or `.dylib` file and imported into the Godot engine. It is recommended to refer to the official Godot documentation for the how-to details.
 
@@ -54,11 +54,11 @@ F. Interfaces related to relay server
 > 4. disconnect_client_via_replay
 > 5. fetch_clients_from_relay
 
-Note: Please refer to the comments in [lib.rs](https://github.com/ashuralyk/kabletop-godot/blob/master/src/lib.rs) for the specific usage of the interfaces. In addition, the Kabletop project is still in the development stage, and most of the interfaces may be modified in subsequent releases.
+Note: Refer to the comments in [lib.rs](https://github.com/ashuralyk/kabletop-godot/blob/master/src/lib.rs) for the specific usage of the interfaces. In addition, the Kabletop project is still in the development stage and may modify most of the interfaces in subsequent releases.
 
 # Gameplay writen in Lua
 
-The [kabletop-godot-sdk](https://github.com/ashuralyk/kabletop-godot/tree/master/kabletop-godot-sdk) submodule contains a complete Lua virtual machine for executing Lua code. For example, in a two-player game, all processes that have an impact on the outcome of the match need to be written in Lua code, because they need to be referenced into the Kabletop contract to complete the verification of the game logic on-chain, and should be identical to the local verification logic.
+The [kabletop-godot-sdk](https://github.com/ashuralyk/kabletop-godot/tree/master/kabletop-godot-sdk) submodule contains a complete Lua virtual machine for executing Lua code. For example, all processes in a two-player game that have an impact on the outcome of the match need to be written in Lua code, because the Kabletop contract needs to refer to these processes to complete the verification of the on-chain game logic, which should be identical to the local verification logic.
 
 The Kabletop game also needs to run Lua code to complete the gameplay process, so it must have intermediate states during execution. `kabletop-godot` does this by listening to a default global variable, exhausting all the events in it after the code execution, and passing them back to the Godot engine through the event callback interface.
 
